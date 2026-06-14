@@ -129,6 +129,19 @@ class Settings(BaseSettings):
     # every dev reload / startup).
     refresh_initial_delay_sec: int = 120
 
+    # ── Cloudflare Tunnel ──────────────────────────────────────────────────
+    # Expose the app over a public HTTPS URL via `cloudflared`, started right
+    # after the backend boots. Requires the `cloudflared` binary in PATH.
+    # ⚠ The app has no authentication — a tunnel makes it publicly reachable.
+    cloudflare_tunnel_enabled: bool = True
+    # Local address cloudflared forwards to (must match the uvicorn host:port).
+    cloudflare_tunnel_target: str = "http://127.0.0.1:8000"
+    # Optional named-tunnel token (Cloudflare Zero Trust dashboard). If set, a
+    # stable named tunnel is run instead of an ephemeral quick tunnel.
+    cloudflare_tunnel_token: Optional[str] = None
+    # Binary name or absolute path for cloudflared.
+    cloudflared_bin: str = "cloudflared"
+
 
 settings = Settings()
 

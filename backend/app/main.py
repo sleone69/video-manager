@@ -21,6 +21,7 @@ from .jobs.resume import clear_pending_jobs, resume_pending_jobs
 from .routers import uploads, videos, stars, embed
 from .streaming.proxy import router as stream_router
 from .streaming.streamtape_proxy import router as st_router
+from .tunnel import get_tunnel_status, start_tunnel, stop_tunnel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,9 +94,13 @@ async def lifespan(app: FastAPI):
         log.info("In-app expiry refresher scheduled (every %ds, first pass in %ds)",
                  settings.refresh_interval_sec, settings.refresh_initial_delay_sec)
 
+    # Expose the app publicly via Cloudflare Tunnel, right after the backend boots.
+    tunnel_proc = await start_tunnel()
+
     log.info("VideoManager API ready")
     yield
     # Shutdown
+    await stop_tunnel(tunnel_proc)
     if refresher_task is not None:
         refresher_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -166,3 +171,9 @@ async def dashboard():
 @app.get("/api/health", tags=["health"])
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/tunnel", tags=["health"])
+async def tunnel_status():
+    """Cloudflare Tunnel status + public URL (for quick tunnels, once established)."""
+    return get_tunnel_status()

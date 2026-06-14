@@ -61,6 +61,9 @@ Edit `.env` and fill in your credentials:
 | `STREAMTAPE_PART_SIZE_BYTES` | Max bytes per Streamtape part (default `8589934592` = 8 GB) |
 | `REFRESH_INTERVAL_SEC` | Expiry-refresher loop interval (default `21600` = 6 h) |
 | `REFRESH_MARGIN_DAYS` | Re-upload this many days before estimated host expiry (default `7`) |
+| `CLOUDFLARE_TUNNEL_ENABLED` | Auto-start a `cloudflared` tunnel at boot to expose the app publicly (default `true`) |
+| `CLOUDFLARE_TUNNEL_TARGET` | Local address the tunnel forwards to (default `http://127.0.0.1:8000`) |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Optional named-tunnel token (stable hostname); blank = ephemeral quick tunnel |
 
 ### 4. Build the frontend
 
@@ -234,6 +237,35 @@ Schedule it with cron/systemd, e.g. every 6 hours:
 
 ---
 
+## Public access (Cloudflare Tunnel)
+
+The app can expose itself over a public HTTPS URL using **Cloudflare Tunnel**, started automatically right after
+the backend boots — no separate process to manage.
+
+**Prerequisite:** install the `cloudflared` binary and make sure it's in `PATH`:
+
+```bash
+curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+  -o /usr/local/bin/cloudflared && sudo chmod +x /usr/local/bin/cloudflared
+```
+
+On startup the server logs the public URL (also available at `GET /api/tunnel`):
+
+```
+Cloudflare tunnel is live: https://<random-words>.trycloudflare.com
+  dashboard: https://<random-words>.trycloudflare.com/dashboard
+```
+
+- **Quick tunnel** (default, free, no account): leave `CLOUDFLARE_TUNNEL_TOKEN` blank — you get a fresh random
+  `*.trycloudflare.com` URL each run.
+- **Named tunnel** (stable hostname): set `CLOUDFLARE_TUNNEL_TOKEN` from the Cloudflare Zero Trust dashboard.
+- Disable with `CLOUDFLARE_TUNNEL_ENABLED=false`.
+
+> ⚠ **Security:** the app has **no authentication** — a tunnel makes the dashboard (uploads/deletes) reachable
+> by anyone who has the URL. Only enable it when you intend public access, or put auth in front first.
+
+---
+
 ## Project structure
 
 ```
@@ -241,6 +273,7 @@ video-manager/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py          # FastAPI app, lifespan, static files
+│   │   ├── tunnel.py        # Cloudflare Tunnel (auto-expose at startup)
 │   │   ├── config.py        # Settings from .env
 │   │   ├── models/          # Pydantic models (Manifest, StreamtapePart, …)
 │   │   ├── db/              # SQLite schema, checkpoints

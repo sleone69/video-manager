@@ -4,7 +4,7 @@
     "one_liner": "Self-hosted FastAPI + React app that splits a video into lossless fMP4 chunks, fans them out to a small replica set of free file hosts, streams them back through a range-aware proxy into an MSE player, and keeps the copies alive via a standalone expiry refresher.",
     "schema_version": "1.1.0",
     "generated": "2026-06-14",
-    "state": "post-optimization: replica-set + concurrent uploads, progressive playback, FileDitch host integrated (free/no-auth/permanent, priority #1), Streamtape ON, and the expiry refresher (standalone CLI + optional in-app schedule).",
+    "state": "post-optimization: replica-set + concurrent uploads, progressive playback, FileDitch host integrated (free/no-auth/permanent, priority #1), Streamtape ON, the expiry refresher (standalone CLI + optional in-app schedule), and a Cloudflare Tunnel that auto-exposes the app over public HTTPS at startup.",
     "how_to_use": "Load this file INSTEAD of re-reading source when you need to know what a module does, what it depends on, the data model, the API surface, or where a behavior lives. Only open the actual source file when you need exact code to edit it. After editing code, update the matching node/edge/issue here in the same change (see maintenance_protocol).",
     "maintenance_protocol": "1) Add/modify a file -> add/update its entry in `modules` (path, role, exports, imports_internal, touches_services, notes). 2) Change an import graph edge -> update `edges`. 3) Change a Pydantic/TS model -> update `data_models`. 4) Add/change a route -> update `endpoints`. 5) Change the upload/playback/resume/refresh behavior -> update `flows`. 6) Fix or introduce a perf/correctness gap -> update `known_issues` (set \"status\":\"resolved\" when fixed). 7) Bump meta.generated and, for structural changes, meta.schema_version. Keep entries terse: one line of behavior per symbol."
   },
@@ -13,6 +13,7 @@
     "backend_entrypoint": "backend/app/main.py:app (FastAPI)",
     "run_api": "uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload  (run from repo root, .venv active)",
     "run_refresher": "python -m backend.app.refresher --once   |   python -m backend.app.refresher --interval 21600   (standalone process; NOT started by the API)",
+    "cloudflare_tunnel": "auto-starts from the lifespan when cloudflare_tunnel_enabled (default True) AND the cloudflared binary is installed; public URL logged at startup and served by GET /api/tunnel. Quick tunnel by default (ephemeral *.trycloudflare.com); named tunnel if CLOUDFLARE_TUNNEL_TOKEN set. Verified live 2026-06-14.",
     "startup_lifespan": "init_db() -> _check_deps(ffmpeg/ffprobe) -> resume_pending_jobs() OR clear_pending_jobs() (if CLEAR_PENDING_JOBS=1 or --clear-pending)",
     "frontend_build": "cd frontend && npm install && npm run build  -> emits frontend/dist (served at /static, /assets; dashboard.html at /dashboard)",
     "key_urls": {
@@ -61,6 +62,10 @@
     {"key": "streamtape_enabled", "config_default": "True", "env": "STREAMTAPE_ENABLED", "purpose": "also split+upload the whole video to Streamtape (enables player ST mode); adds upload time"},
     {"key": "fileditch_enabled", "config_default": "True", "env": "FILEDITCH_ENABLED", "purpose": "include the free/no-auth/permanent FileDitch host in the upload pool"},
     {"key": "refresh_in_app", "config_default": "True", "env": "REFRESH_IN_APP", "purpose": "API server also runs the refresher on a schedule in-process; refresh_initial_delay_sec (120) before the first pass"},
+    {"key": "cloudflare_tunnel_enabled", "config_default": "True", "env": "CLOUDFLARE_TUNNEL_ENABLED", "purpose": "start a cloudflared tunnel from the lifespan to expose the app over public HTTPS (needs the cloudflared binary). ⚠ app has no auth"},
+    {"key": "cloudflare_tunnel_target", "config_default": "http://127.0.0.1:8000", "env": "CLOUDFLARE_TUNNEL_TARGET", "purpose": "local address cloudflared forwards to (match uvicorn host:port)"},
+    {"key": "cloudflare_tunnel_token", "config_default": "None", "env": "CLOUDFLARE_TUNNEL_TOKEN", "purpose": "if set, run a stable named tunnel instead of an ephemeral quick tunnel"},
+    {"key": "cloudflared_bin", "config_default": "cloudflared", "env": "CLOUDFLARED_BIN", "purpose": "cloudflared binary name/path"},
     {"key": "refresh_interval_sec", "config_default": "21600 (6h)", "purpose": "loop interval for the refresher daemon"},
     {"key": "refresh_margin_days", "config_default": "7", "purpose": "re-upload a copy this many days before estimated expiry (currently expiry is mostly handled by the keep-alive verify pass)"},
     {"key": "stream_host_priority", "config_default": "[gofile,filester,cyberfile,pixeldrain]", "env": "STREAM_HOST_PRIORITY (.env: [filester,pixeldrain,cyberfile])", "purpose": "order hosts are tried for streaming failover and the order upload targets/replica fills are chosen"},
@@ -100,7 +105,8 @@
   },
 
   "modules": [
-    {"id": "backend/app/main.py", "layer": "app", "role": "FastAPI app factory, lifespan (init_db, dep check, resume/clear jobs, optional in-app refresher loop), CORS, router mounts, static dist mount, /dashboard, /api/health", "exports": ["app", "lifespan", "_run_refresher_loop", "_get_player_js"], "imports_internal": ["config", "db", "jobs.resume", "routers.uploads", "routers.videos", "routers.stars", "routers.embed", "streaming.proxy", "streaming.streamtape_proxy", "refresher (lazy, when refresh_in_app)"]},
+    {"id": "backend/app/main.py", "layer": "app", "role": "FastAPI app factory, lifespan (init_db, dep check, resume/clear jobs, optional in-app refresher loop, Cloudflare tunnel start/stop), CORS, router mounts, static dist mount, /dashboard, /api/health, /api/tunnel", "exports": ["app", "lifespan", "_run_refresher_loop", "_get_player_js"], "imports_internal": ["config", "db", "jobs.resume", "routers.uploads", "routers.videos", "routers.stars", "routers.embed", "streaming.proxy", "streaming.streamtape_proxy", "tunnel", "refresher (lazy, when refresh_in_app)"]},
+    {"id": "backend/app/tunnel.py", "layer": "app", "role": "Cloudflare Tunnel integration. start_tunnel() spawns cloudflared from the lifespan (quick tunnel by default; named tunnel if CLOUDFLARE_TUNNEL_TOKEN set) and scrapes the public *.trycloudflare.com URL from its output; stop_tunnel() terminates it on shutdown; get_tunnel_status() backs GET /api/tunnel. Degrades gracefully (warns) if the cloudflared binary is missing.", "exports": ["start_tunnel", "stop_tunnel", "get_tunnel_status"], "imports_internal": ["config"], "touches_services": ["cloudflare (cloudflared subprocess)"]},
     {"id": "backend/app/config.py", "layer": "core", "role": "pydantic-settings Settings from .env; creates data dirs. Notable: replica_count(2), upload_concurrency(3), streamtape_enabled(True), fileditch_enabled(True), refresh_in_app(True)+refresh_initial_delay_sec, refresh_interval_sec, chunk_size_bytes default 6MB; stream_host_priority leads with fileditch", "exports": ["settings", "Settings"], "imports_internal": []},
     {"id": "backend/app/models/__init__.py", "layer": "core", "role": "all Pydantic schemas (see data_models); ChunkLocation now carries expiry fields", "exports": ["Manifest", "Chunk", "ChunkLocation", "Resolution", "StreamtapePart", "Thumbnail", "JobProgress", "JobStatus", "LocationStatus", "HostName", "VideoMeta", "Star*", "StreamManifest", "StreamChunk"], "imports_internal": []},
 
@@ -152,7 +158,7 @@
 
     {"id": "frontend/src/api/client.ts", "layer": "fe-player", "role": "player API types + fetchManifest + chunkUrl + streamtapeProxyUrl", "exports": ["fetchManifest", "chunkUrl", "streamtapeProxyUrl", "StreamManifest", "StreamChunk", "StreamtapePart", "Resolution", "Thumbnail"], "imports_internal": []},
     {"id": "frontend/src/player/seek.ts", "layer": "fe-player", "role": "resolve(timestamp,chunks)->ResolvedPosition (mirror of backend resolver)", "exports": ["resolve", "ResolvedPosition"], "imports_internal": ["api/client(types)"]},
-    {"id": "frontend/src/player/useChunkStream.ts", "layer": "fe-player", "role": "MSE engine: sequential worker streams each chunk via fetch+ReadableStream reader and appends slices PROGRESSIVELY (timestampOffset set only on first slice of a chunk); per-chunk in-memory cache (full buffer assembled from slices); seek cancels+restarts; PREFETCH_AHEAD=3", "exports": ["useChunkStream"], "imports_internal": ["api/client", "player/seek"], "notes": ["ISSUE-4 resolved: progressive append means playback starts before the whole chunk arrives", "ISSUE-5 mitigated: still one worker, but progressive append + smaller chunks remove the worst stalls"]},
+    {"id": "frontend/src/player/useChunkStream.ts", "layer": "fe-player", "role": "MSE engine: sequential worker streams each chunk via fetch+ReadableStream reader and appends slices PROGRESSIVELY (timestampOffset set only on first slice of a chunk); per-chunk in-memory cache (full buffer assembled from slices); seek cancels+restarts; PREFETCH_AHEAD=3", "exports": ["useChunkStream"], "imports_internal": ["api/client", "player/seek"], "notes": ["ISSUE-4 resolved: progressive append means playback starts before the whole chunk arrives", "ISSUE-5 mitigated: still one worker, but progressive append + smaller chunks remove the worst stalls", "ISSUE-12 resolved: onSeeking calls sb.abort() to reset the segment parser (a seek interrupting a progressive append left it mid-segment, making the next timestampOffset set throw); drainQueue retries timestampOffset after abort() as a safety net"]},
     {"id": "frontend/src/player/VideoPlayer.tsx", "layer": "fe-player", "role": "player UI; loads manifest; MSE vs Streamtape toggle (ST button when streamtape_parts present); keyboard shortcuts; controls", "exports": ["VideoPlayer"], "imports_internal": ["api/client", "player/useChunkStream", "player/controls/SeekBar"]},
     {"id": "frontend/src/player/controls/SeekBar.tsx", "layer": "fe-player", "role": "scrubber with buffered-range painting", "exports": ["SeekBar"], "imports_internal": []},
     {"id": "frontend/src/player/controls/ResolutionBadge.tsx", "layer": "fe-player", "role": "quality badge component", "exports": ["ResolutionBadge"], "imports_internal": [], "notes": ["not imported by VideoPlayer -> possibly legacy"]},
@@ -183,7 +189,8 @@
     {"method": "GET", "path": "/api/stream/st/{video_id}", "handler": "streaming/streamtape_proxy.streamtape_proxy", "purpose": "Streamtape virtual stream"},
     {"method": "GET", "path": "/embed/{video_id}", "handler": "routers/embed.embed_player", "purpose": "player HTML shell"},
     {"method": "GET", "path": "/dashboard", "handler": "main.dashboard", "purpose": "dashboard SPA"},
-    {"method": "GET", "path": "/api/health", "handler": "main.health", "purpose": "health check"}
+    {"method": "GET", "path": "/api/health", "handler": "main.health", "purpose": "health check"},
+    {"method": "GET", "path": "/api/tunnel", "handler": "main.tunnel_status", "purpose": "Cloudflare tunnel status + public URL"}
   ],
 
   "flows": {
@@ -248,7 +255,8 @@
     {"id": "ISSUE-8", "status": "resolved", "area": "durability/expiry", "resolution": "backend/app/refresher: verify pass keeps idle-expiry hosts alive and detects dead links; repair pass re-downloads from a healthy copy and re-uploads to maintain replica_count, rewriting ChunkLocation file_id/url. ChunkLocation gained uploaded_at/last_verified_at/expires_at"},
     {"id": "ISSUE-9", "status": "open", "area": "dead-config", "symptom": "Buzzheavier configured but never uploaded to", "fix_idea": "wire into replica fill path or remove"},
     {"id": "ISSUE-10", "status": "open", "area": "dead-code", "symptom": "streaming/resolver.py unused server-side", "fix_idea": "remove or repurpose"},
-    {"id": "ISSUE-11", "status": "open", "area": "upload-speed/robustness", "symptom": "persistently-failing hosts retried each chunk", "fix_idea": "probe host health once per job and skip dead hosts"}
+    {"id": "ISSUE-11", "status": "open", "area": "upload-speed/robustness", "symptom": "persistently-failing hosts retried each chunk", "fix_idea": "probe host health once per job and skip dead hosts"},
+    {"id": "ISSUE-12", "status": "resolved", "area": "playback/seek", "symptom": "after seeking to a new timestamp the target chunk downloads but never plays (initial playback fine)", "root_cause": "the progressive-append change (ISSUE-4) could be interrupted mid-chunk by a seek, leaving the SourceBuffer parser mid-media-segment; the next sb.timestampOffset assignment then threw InvalidStateError, so appendBuffer was skipped and the chunk's data (incl. its init segment) was dropped", "resolution": "useChunkStream.onSeeking calls sb.abort() to reset the parser before flush/re-append; drainQueue retries timestampOffset after abort() as a safety net"}
   ],
 
   "glossary": {
