@@ -1,0 +1,576 @@
+Streamtape API
+API
+General Information
+Account
+Account Infos
+Stream
+generate Download Ticket
+get Download Link
+check File Info
+Upload
+Upload
+Remote Upload
+Add Remote Upload
+Remove Remote Upload
+Check Status
+File/Folder Management
+List Folder/Files
+Create Folder
+Rename Folder
+Delete Folder
+Rename File
+Move File
+Delete File
+Converting files
+Show running converts
+Show failed converts
+Get splash image
+Embed JavaScript API
+Player.js Support
+Video Link Query Parameters
+Custom Player Color
+Dynamic Subtitles
+Dynamic Thumbnail
+General Information
+Please note: This API has been adapted to match the specification from other services. However there are small differences, be aware of them!
+
+Base-URL for our API is https://api.streamtape.com
+
+All requests to the API shall be HTTP GET or POST
+
+Please make sure to use the API with https only, http requests will result in a HTTP 302 redirect to https.
+
+Most requests require an API Login & API Key, you can find both in the User Panel at the "Account Settings" Tab.
+
+Response is json, structure is as follows:
+
+{
+"status": <status-code>,
+"msg": "<informational message. might vary, use the status code in your code!>",
+"result": <result of the request. varies depending on the request>
+}
+status
+200: Everything is OK. Request succeeded
+
+400: Bad request (e.g. wrong parameters)
+
+403: Permission denied (wrong api login/key, action on a file which does not belong to you, ...)
+
+404: File not found
+
+451: Unavailable For Legal Reasons
+
+509: Bandwidth usage exceeded. Please try again later. (you might see this during peak hours)
+
+50x: Server errors. You should not see this, but be prepared.
+
+msg
+This message gives more detailed information in case there is an error.
+
+You can use this for displaying it to the user, but please don't use it for checking if the request succeeded. That's what the status code is for.
+
+result
+holds the response of the request if succeeded. Might hold an array of data or just a boolean true/false, depending on the request
+
+Account Infos
+Everything account related (total used storage, reward, ...)
+
+Request
+https://api.streamtape.com/account/info?login={login}&key={key}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+    "apiid": "<your api key>",
+    "email": "user@gmail.com",
+    "signup_at": "2019-12-31 23:59:59",
+}
+}
+Download Ticket
+preparing a Download
+
+Request
+https://api.streamtape.com/file/dlticket?file={file}&login={login}&key={key}
+Parameters
+
+Name	Description	Example	Required
+file	File-ID	wg8ad12d3QiJRXG	yes
+login	API-Login	y7bhafa3bxfxudzk	no
+key	API-Key / API-Password	dq6hzjewe27bmwdn	no
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+    "ticket": "wg8ad12d3QiJRXG~~1585532987430~n~~0~q75Z2aJg-TYfQgxz8",
+    "wait_time": 10,
+    "valid_until": "2019-12-31 23:59:59"
+}
+}
+Download Link
+get a download link by using download ticket
+
+Request
+https://api.streamtape.com/file/dl?file={file}&ticket={ticket}&captcha_response={captcha_response}
+Parameters
+
+Name	Description	Example	Required
+file	File-ID	1585532987430	yes
+ticket	previously generated download ticket	wg8ad12d3QiJRXG~~1440353112~n~~0~q75Z2aJg-TYfQgxz8	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+"name": "Vlog1220-Sidney.mp4",
+"size": 12345,
+"url": "https://tapecontent.net/Vlog1220-Sidney.mp4",
+}
+}
+File Info
+check the status of a file, e.g. if the file exists
+
+Request
+https://api.streamtape.com/file/info?file={file}&login={login}&key={key}
+Parameters
+
+Name	Description	Example	Required
+file	File-ID(s), single file or comma-separated (max. 100)	wg8ad12d3QiJRXG,wg8ad12d3QiJRXG4,wg8ad12d3QiJRXG5,wg8ad12d3QiJRXG6	yes
+login	API-Login	y7bhafa3bxfxudzk	no
+key	API-Key / API-Password	dq6hzjewe27bmwdn	no
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+    "wg8ad12d3QiJRXG3": {
+        "id": "wg8ad12d3QiJRXG3",
+        "name": "MyMinecraftLetsPlay.mp4",
+        "size": 1234,
+        "type": "video/mp4",
+        "converted": true,
+        "status": 200
+    },
+    "ag8ad12d3QiJRXG4": {
+        "id": "ag8ad12d3QiJRXG5",
+        "name": "OutfitOfTheDay21.mp4",
+        "size": 12346,
+        "type": "video/mp4",
+        "converted": true,
+        "status": 200
+    },
+    "bg8ad12d3QiJRXG9": {
+        "id": "bg8ad12d3QiJRXG9",
+        "name": "Travel with Me - Episode 128",
+        "size": 1234567,
+        "type": "video/mp4",
+        "converted": true,
+        "status": 200
+    },
+    "yg8ad12d3QiJRXG1": {
+        "id": "yg8ad12d3QiJRXG1",
+        "name": "Reaction Video",
+        "size": 12345,
+        "type": "video/mp4",
+        "converted": true,
+        "status": 200
+    },
+}
+}
+Upload
+Get an Upload URL
+
+Uploads shall be POSTed to the upload URL returned by our API and shall be multipart/form-data encoded. Example with curl:
+
+curl -F file1=@/path/to/file.txt https://tapecontent.net/xfsproupload/wg8ad12d3QiJRXG
+
+Request
+https://api.streamtape.com/file/ul?login={login}&key={key}&folder={folder}&sha256={sha256}&httponly={httponly}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	no
+key	API-Key / API-Password	dq6hzjewe27bmwdn	no
+folder	Folder-ID to upload to	1234	no
+sha256	Expected sha256
+If sha256 of uploaded file doesn't match this value, upload fails	ca247fe30e68d516a54e7a57247724617c345daa88168f6264f756d7125ee9eb	no
+httponly	If this is set to true, use only http upload links	<not set>	no
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+    "url": "https://tapecontent.net/xfsupload/wg8ad12d3QiJRXG",
+    "valid_until": "2019-12-31 23:59:59"
+}
+}
+Add Remote Upload
+Remote Uploading a file
+
+Request
+https://api.streamtape.com/remotedl/add?login={login}&key={key}&url={url}&folder={folder}&headers={headers}amp;name={name}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+url	Remote URL	https://vid.me/myvideo123	yes
+folder	Folder-ID to upload to	LnvnE51P5gc	no
+headers	additional HTTP headers, separated by newline (e.g. Cookies or HTTP Basic-Auth)	Cookie: key=value	no
+Name	Custom Name for new File (optional, will get default name if not set))	MyNewMovie.mp4	no
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+"id": "rbAarvRPXdYbaxY",
+"folderid": "LnvnE51P5gc"
+}
+}
+Remove Remote Upload
+Removing/Cancelling a remote upload
+
+Request
+https://api.streamtape.com/remotedl/remove?login={login}&key={key}&id={id}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+id	Remote Upload ID (or put in "all" to remove all remote uploads)	rbAarvRPXdYbaxY or "all"	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": true
+}
+Check Remote Upload Status
+Check Status of Remote Upload
+
+Request
+https://api.streamtape.com/remotedl/status?login={login}&key={key}&limit={limit}&id={id}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+id	Remote Upload ID	LnvnE51P5gc	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+"LnvnE51P5gc": {
+    "id": "LnvnE51P5gc",
+    "remoteurl": "https://vid.me/myvideo123",
+    "status": "new",
+    "bytes_loaded": null,
+    "bytes_total": null,
+    "folderid": "LnvnE51P5gc",
+    "added": "2019-12-31 23:59:59",
+    "last_update": "2019-12-31 23:59:59",
+    "extid": false,
+    "url": false
+},
+}
+}
+List Folder/Files
+Shows the content of your folders
+
+Request
+https://api.streamtape.com/file/listfolder?login={login}&key={key}&folder={folder}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+folder	Folder-ID	5	no
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+"folders": [
+    {
+    "id": "B-qlJkdHFeo",
+    "name": "Subfolder"
+    }
+],
+"files": [
+    {
+    "name": "MyMinecraftLetsPlay.mp4",
+	"size": 7040842,
+	"link": "https://streamtape.com/v/rbAarvRPXdYbaxY/MyMinecraftLetsPlay.mp4",
+	"created_at": 1585532987430,
+	"downloads": 0,
+	"linkid": "rbAarvRPXdYbaxY",
+	"convert": "converted"
+    }
+]
+}
+}
+Create Folder
+Creates a new Folder
+
+Request
+https://api.streamtape.com/file/createfolder?login={login}&key={key}&name={name}&pid={parent}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+name	Name of new Folder	My New Folder Name	no
+pid	Parent Folder ID (if not set root folder will be used)	B-qlJkdHFeo	no
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": {
+    "folderid": "LnvnE51P5gc"
+}
+}
+Rename Folder
+Renames a Folder
+
+Request
+https://api.streamtape.com/file/renamefolder?login={login}&key={key}&folder={folder}&name={name}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+folder	Folder ID to rename	LnvnE51P5gc	yes
+name	New Name	My new Name	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": true
+}
+Delete Folder
+Deletes a Folder with all subfolders and all files in it. Be careful!
+
+Request
+https://api.streamtape.com/file/deletefolder?login={login}&key={key}&folder={folder}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+folder	Folder ID to delete	LnvnE51P5gc	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": true
+}
+Rename File
+Renames a File
+
+Request
+https://api.streamtape.com/file/rename?login={login}&key={key}&file={file}&name={name}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+file	File ID to rename	wg8ad12d3QiJRXG	yes
+name	New Name	newname.mp4	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": true
+}
+Move File
+Moves a File into a different folder
+
+Request
+https://api.streamtape.com/file/move?login={login}&key={key}&file={file}&folder={folder}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+file	File ID to move	wg8ad12d3QiJRXG	yes
+folder	Folder to move in	LnvnE51P5gc	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": true
+}
+Delete File
+Removes a file
+
+Request
+https://api.streamtape.com/file/delete?login={login}&key={key}&file={file}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+file	File ID to delete	wg8ad12d3QiJRXG	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": true
+}
+Lists running converts
+It lists all running converts with their progress
+
+Request
+https://api.streamtape.com/file/runningconverts?login={login}&key={key}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result":[
+	{
+	   "name":"streamtape.mp4",
+	   "folderid":"0",
+	   "status":"new",
+	   "progress":0,
+	   "retries":0,
+	   "link":"https://streamtape.com/v/XklyYLYAZZZDZW/streamtape.mp4",
+	   "linkid":"XklyYLYAZZZDZW"
+	},
+	{
+	   "name":"Blender.mp4",
+	   "folderid":"",
+	   "status":"pending",
+	   "progress":0.75,
+	   "retries":0,
+	   "link":"https://streamtape.com/v/B4GaCbJAAAyBxb/Blender.mp4",
+	   "linkid":"B4GaCbJAAAyBxb"
+	}
+]
+}
+Lists failed converts
+It lists all converts which failed. Contact us if you have a valid video which does not convert on our side.
+
+Request
+https://api.streamtape.com/file/failedconverts?login={login}&key={key}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result":[
+	{
+	   "name":"streamtape.mp4",
+	   "folderid":"0",
+	   "status":"error",
+	   "progress":0,
+	   "retries":2,
+	   "link":"https://streamtape.com/v/XklyYLYAZZZDZW/streamtape.mp4",
+	   "linkid":"XklyYLYAZZZDZW"
+	}
+]
+}
+Get Thumnail image
+Shows the video Thumbnail
+
+Request
+https://api.streamtape.com/file/getsplash?login={login}&key={key}&file={file}
+Parameters
+
+Name	Description	Example	Required
+login	API-Login	y7bhafa3bxfxudzk	yes
+key	API-Key / API-Password	dq6hzjewe27bmwdn	yes
+file	File-ID	wg8ad12d3QiJRXG	yes
+Response
+200 (OK)
+Content-Type: application/json
+{
+"status": 200,
+"msg": "OK",
+"result": "https://thumb.tapecontent.net/thumb/wg8ad12d3QiJRXG/thumb.jpg"
+}
+Embed JavaScript API / Player.js Support
+You can control an Stramtape.com embed using the Player.js Open Standard.
+
+For more details how you can interact with an embed on the client-side using JavaScript see the API Docs of Player.js.
+
+With the Player.js API you can e.g. control the playback and volume of a video.
+
+Custom Player Color
+Don't like our default color? Or you prefer a red player for your christmas video on your blog? While we do not recommend changing the color, you are free to do so!
+
+Just pass RGB Color values like this to your URL (works for embed & video links):
+https://streamtape.com/e/wg8ad12d3QiJRXG?color=26,194,102
+The example uses the player color rgb(26,194,102), which is green.
+
+Dynamic Subtitles
+You have a multilingual audience? You can also load subtitles dynamically from URL(s):
+
+Recommended: Use Query Parameters like this:
+https://streamtape.com/e/wg8ad12d3QiJRXG?c1_label=FR&c1_file=http://yoursubtitle.com/file.srt
+You can add multiple subtitles with this method (just count from 1 upwards). Both .srt and .vtt formats are supported.
+Add url to "name" attribute in an iframe:
+<iframe name="subs:http://yoursubtitle.com/file.srt" src="https://streamtape.com/e/wg8ad12d3QiJRXG" allowfullscreen> </iframe>
+Only one subtitle file is supported with this method. Both .srt and .vtt formats are supported.
+Advanced: Use Subtitle Definition JSON:
+https://streamtape.com/e/wg8ad12d3QiJRXG?subtitle_json=http://yoursubtitle.com/def.json
+The structure of the Subtitle Definition JSON should look like this (has same attribute names as HTML5 TextTrack Element):
+[
+ {"src":"http://yoursubtitle.com/file.vtt", "label":"Language1", default: true},
+ {"src":"http://yoursubtitle.com/file2.vtt", "label":"Language2"}
+]
+								
+The default attribute is optional and is "false" if you do not set it. You must also set appropiate CORS Headers (e.g. Access-Control-Allow-Origin) as the viewers browser will fetch the JSON file. You also have to use VTT format.
+Dynamic Thumbnail
+You are tweaking your thumbnails to improve your conversion rates? Or you have another use case where you want to use a dynamically generated Thumbnail? No Problem:
+
+Just pass your custom thumbnail URL into the query string (works for embed & video links):
+https://streamtape.com/e/wg8ad12d3QiJRXG?thumb=http://myimage.com/thumb.jpg

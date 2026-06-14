@@ -1,0 +1,268 @@
+API Documentation
+Integrate with Filester using our REST API. Upload files, manage folders, and access your content programmatically.
+
+Base URL:
+https://u1.filester.me
+Authentication
+Upload
+Files
+Folders
+Account
+Errors
+Authentication
+All API requests require an API key passed as a Bearer token in the Authorization header.
+
+Get your API key from your Account Settings page. Guest uploads (no authentication) are also supported for the upload endpoint.
+
+Authorization: Bearer YOUR_API_KEY
+Rate limit: 1,000 requests per hour per API key
+Upload
+POST
+/api/v1/upload
+Upload a file. Supports guest uploads (no auth required) or authenticated uploads with an API key.
+
+Headers
+Content-Type	multipart/form-data	required
+Authorization	Bearer YOUR_API_KEY	optional
+X-Folder-ID	Folder identifier to upload into	optional
+Form Fields
+file	The file to upload	required
+Response
+{
+  "success": true,
+  "message": "File uploaded successfully",
+  "slug": "aBcDeFg",
+  "url": "https://filester.me/d/aBcDeFg",
+  "file_id": 12345,
+  "thumbnail_url": "/t/UUID"
+}
+Example (cURL)
+curl -X POST https://u1.filester.me/api/v1/upload \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@/path/to/file.mp4"
+Example (Guest Upload)
+curl -X POST https://u1.filester.me/api/v1/upload \
+  -F "file=@/path/to/file.jpg"
+Example (Upload to Folder)
+curl -X POST https://u1.filester.me/api/v1/upload \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "X-Folder-ID: a1b2c3d4e5f6g7h8" \
+  -F "file=@/path/to/file.zip"
+GET
+/api/v1/upload/status?slug={slug}
+Check the status of an uploaded file.
+
+Response
+{
+  "slug": "aBcDeFg",
+  "status": "completed",
+  "upload_date": "2026-03-15T10:30:00Z",
+  "thumbnail_url": "/t/UUID"
+}
+Files
+GET
+/api/v1/files
+List your uploaded files with pagination and search.
+
+Query Parameters
+page	Page number (default: 1)	optional
+per_page	Items per page, 1-100 (default: 20)	optional
+folder	Folder identifier, or "root" for root files only	optional
+search	Search by filename	optional
+Response
+{
+  "success": true,
+  "data": [
+    {
+      "id": 12345,
+      "uuid": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "video.mp4",
+      "size": 104857600,
+      "type": "video/mp4",
+      "url": "https://filester.me/d/aBcDeFg",
+      "folder_id": "a1b2c3d4",
+      "created_at": "2026-03-15T10:30:00Z",
+      "downloads": 42
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "per_page": 20,
+    "total": 150,
+    "pages": 8
+  }
+}
+Example
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://u1.filester.me/api/v1/files?page=1&per_page=10"
+GET
+/api/v1/file/{id}
+Get details of a specific file. The id can be a slug, UUID, or numeric ID.
+
+Response
+{
+  "success": true,
+  "data": {
+    "id": 12345,
+    "uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "slug": "aBcDeFg",
+    "name": "photo.jpg",
+    "size": 2048000,
+    "type": "image/jpeg",
+    "url": "https://filester.me/d/aBcDeFg",
+    "has_thumbnail": true,
+    "created_at": "2026-03-15T10:30:00Z",
+    "downloads": 5,
+    "views": 23
+  }
+}
+POST
+/file/delete
+Delete one or more files.
+
+Request Body
+{
+  "identifiers": ["aBcDeFg", "xYzAbCd"]
+}
+Response
+{
+  "success": true,
+  "message": "Files deleted successfully",
+  "total_processed": 2,
+  "successful_deletes": 2,
+  "failed_deletes": 0,
+  "files_deleted": 2
+}
+Folders
+GET
+/api/v1/folders
+List all your folders.
+
+Response
+{
+  "success": true,
+  "data": [
+    {
+      "id": "a1b2c3d4e5f6g7h8",
+      "name": "My Photos",
+      "public": true,
+      "file_count": 24,
+      "created_at": "2026-03-10T08:00:00Z"
+    }
+  ]
+}
+POST
+/api/v1/folder
+Create a new folder.
+
+Request Body
+name	Folder name (max 100 characters)	required
+public	1 for public, 0 for private (default: 1)	optional
+password	Password to protect the folder	optional
+Response
+{
+  "success": true,
+  "message": "Folder created",
+  "data": {
+    "identifier": "a1b2c3d4e5f6g7h8",
+    "name": "My Photos",
+    "hasPassword": false
+  }
+}
+Example
+curl -X POST https://u1.filester.me/api/v1/folder \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Photos", "public": 1}'
+GET
+/api/v1/folder/{identifier}/files
+List all files in a specific folder.
+
+Response
+{
+  "success": true,
+  "data": [
+    {
+      "id": 12345,
+      "name": "photo1.jpg",
+      "size": 2048000,
+      "type": "image/jpeg",
+      "url": "https://filester.me/d/aBcDeFg",
+      "created_at": "2026-03-15T10:30:00Z"
+    }
+  ]
+}
+POST
+/folder/delete
+Delete one or more folders and all files within them.
+
+Request Body
+{
+  "identifiers": ["a1b2c3d4e5f6g7h8"]
+}
+Response
+{
+  "success": true,
+  "message": "Folders deleted",
+  "total_processed": 1,
+  "successful_deletes": 1,
+  "files_deleted": 24
+}
+Account
+GET
+/api/v1/account
+Get your account information and usage statistics.
+
+Response
+{
+  "success": true,
+  "data": {
+    "id": 42,
+    "username": "johndoe",
+    "storage_used": 5368709120,
+    "storage_limit": 10737418240,
+    "files_count": 150,
+    "folders_count": 12,
+    "api_requests_today": 47
+  }
+}
+Example
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://u1.filester.me/api/v1/account"
+Health
+GET
+/health
+Check API health status. No authentication required.
+
+Response
+{
+  "status": "healthy",
+  "timestamp": 1711526400,
+  "service": "storage-api"
+}
+Errors
+All errors follow a consistent format. HTTP status codes are used appropriately.
+
+{
+  "success": false,
+  "message": "Description of what went wrong"
+}
+Status Codes
+Code	Meaning
+200	Success
+201	Created (folder creation)
+400	Bad request - missing or invalid parameters
+401	Unauthorized - invalid or missing API key
+403	Forbidden - insufficient permissions
+404	Not found - resource doesn't exist
+429	Rate limited - too many requests
+500	Internal server error
+Limits
+Resource	Limit
+File size (API upload)	10 GB
+File size (Web upload)	10 GB
+Storage per account	10 GB
+API requests	1,000 / hour
+Folder name length	100 characters
+Folder nesting depth	Unlimited nested folders
+File inactivity	Deleted after 45 days without views or downloads

@@ -1,0 +1,61 @@
+FILEDITCH API
+Simple HTTP uploads, no auth
+
+The FileDitch API is dead simple. POST a file, get a JSON response with a URL. No API keys, no accounts, no bullshit.
+
+Permanent uploads — new.fileditch.com
+Files are kept as long as storage allows — no scheduled expiry.
+
+Endpoint
+POSThttps://new.fileditch.com/upload.php
+Raw body upload — fastest method
+curl -T yourfile.mp4 "https://new.fileditch.com/upload.php?filename=yourfile.mp4"
+Raw POST with --data-binary
+curl -X POST \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @yourfile.mp4 \
+  "https://new.fileditch.com/upload.php?filename=yourfile.mp4"
+Multipart — also works
+curl -F "file=@yourfile.mp4" https://new.fileditch.com/upload.php
+Temp uploads — temp.fileditch.com
+Same API, swap the host. Files uploaded here are automatically deleted 72 hours after upload — ideal for one-off transfers.
+
+Endpoint
+POSThttps://temp.fileditch.com/upload.php
+Example
+curl -T yourfile.mp4 "https://temp.fileditch.com/upload.php?filename=yourfile.mp4"
+Filename
+The server resolves the filename in this order. The first match wins:
+
+1.  ?filename=  query parameter
+2.  X-Filename  request header
+3.  Content-Disposition header  (filename="...")
+4.  Multipart field filename
+5.  Random hex string           (fallback)
+Spaces are replaced with underscores automatically.
+
+Success response
+success	boolean — always true on success
+url	string — direct link to the uploaded file
+filename	string — final filename stored on server
+size	integer — file size in bytes
+Example
+{
+  "success": true,
+  "url": "https://fileditchfiles.me/file.php?f=/alpha0/a3f9c.../yourfile.mp4",
+  "filename": "yourfile.mp4",
+  "size": 104857600
+}
+Error response
+{ "error": "description" }
+400	Empty file, or no file sent
+403	Blocked file type (executables, scripts, web files)
+405	Wrong HTTP method
+413	File exceeds 100 GB limit
+500	Server error
+Limits
+Max file size	100 GB
+Permanent retention	Indefinite, storage permitting (new.fileditch.com)
+Temp retention	72 hours — files are auto-deleted (temp.fileditch.com)
+Blocked extensions	php, html, js, exe, apk, sh, py, bat and other executables & scripts
+Authentication	None required

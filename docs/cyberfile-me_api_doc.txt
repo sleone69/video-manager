@@ -1,0 +1,762 @@
+API
+File Upload API
+Overview
+Error Handling
+Authentication
+/authorize
+/disable_access_token
+User Accounts
+/account/info
+/account/package
+Files
+/file/upload
+/file/download
+/file/info
+/file/edit
+/file/delete
+/file/move
+/file/copy
+Folders
+/folder/create
+/folder/listing
+/folder/info
+/folder/edit
+/folder/delete
+/folder/move
+Overview
+The file upload API is an interface which can be used in your own applications to securely upload, manage and download files externally from this website.
+
+API compatibility
+This API will evolve over time when access to other data within the system is made available. However, none of the current endpoints or response values will change. You can write your integration code knowing that it will now be affected by future updates.
+
+SSL/HTTPS recommended
+We recommend SSL is used for all requests. You can require SSL by forcing it via your web server.
+
+UTF-8 encoding
+Every string passed to and from the API needs to be UTF-8 encoded.
+
+HTTP Method
+All methods are done using POST unless otherwise stated.
+
+Date format
+All date/times in the API are strings in the following format:
+
+Y-m-d H:i:s
+For example:
+
+2026-06-11 13:18:41
+API Path
+All requests are sent to the follow API host:
+
+https://api.cyberfile.me/api/v2/
+Error handling
+Errors are returned using standard HTTP error code syntax. Any additional information is included in the body of the return call, JSON-formatted.
+
+Standard API errors
+Error Code:	Description:
+400	Bad input parameter. Response error should show which one and why.
+401	Bad or expired token. To fix, you should re-authenticate the user.
+404	File not found at the provided path.
+405	Request method not expected (generally should be GET or POST).
+429	Maximum API request limit reached. Try to reduce the amount of requests or look at raising this via your web server configuration.
+5xx	Server error. See full list here.
+Sample Error JSON Response
+
+{
+"status": "error",
+"response": "Could not authenticate user. The username and password may be invalid or your account may be locked from too many failed logins.",
+"_datetime": "2026-06-11 13:18:41"
+}
+Authentication
+All requests to the API must be done with a valid access_token and account_id. These can be obtained by submitting your account username and password to the 'authorize' endpoint. These can be obtained by submitting your API keys to the 'authorize' endpoint. The same 'access_token' can be used multiple times in the same session, so you shouldn't generate a new access_token for each request.
+
+API Flow
+Your external application should make API requests in the following order:
+
+Request an access_token and account_id /authorize.
+Example Response:
+
+{
+"data": {
+        "access_token": "lGoVSof0VRwq1Gaza8fODfIxQ4pu6j6rZvnRUCRPunfw4q5ezk3dALLqQbUWu1ntxKkrnbgSzwoDWtSwOVJoHuPxFKt9LRCjCXK081SIxgmuJe1y9KXQfMoVwS4iJHBm",
+        "account_id": "158642"
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Request to the core API, such as getting user account details /account/info.
+Make further API requests at any stage using the same access_token.
+Once you've completed your requests you can clear the access_token. This is optional as these are also automatically cleared after 1 hour of no activity /disable_access_token.
+Important: On each request you should check an error response. If the request resulted in an error, the "_status" will be "error" with more information in the "response" parameter.
+/authorize
+Provides an access_token and account_id to make further requests into the API.
+
+URL Structure
+https://api.cyberfile.me/api/v2/authorize
+Parameters
+username The account username, as used on the site login.
+password The account password, as used on the site login.
+Returns
+A JSON-encoded string including an access token (access_token) and account id (account_id).
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "access_token": "X3Xp6cUcue22Q3AlpCiZz3mJQWPT2v10zZqGblSGzVIqZiMoV4ou8LeYH4SKAUL9TcP5xIL7DtxDMj2HoqcwbrvTvoD5ioebA4h7M2fqwM3i650vwc1IExB9VffeDtqe",
+        "account_id": "158642"
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide a username.
+200	Please provide a password.
+200	Please provide key1. It must be 64 characters in length.
+200	Please provide key2. It must be 64 characters in length.
+200	Could not authenticate user. The username and password may be invalid or your account may be locked from too many failed logins..
+200	Failed issuing access token.
+/disable_access_token
+Disables an active access_token.
+
+URL Structure
+https://api.cyberfile.me/api/v2/disable_access_token
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "Token removed or no longer available.",
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+/account/info
+Provides details of an account based on the account_id.
+
+URL Structure
+https://api.cyberfile.me/api/v2/account/info
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+Returns
+A JSON-encoded string including a username (username), account level id (level_id), email address (email) and more.
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "id": "158642",
+        "username": "admin",
+        "level_id": "20",
+        "email": "email@yoursite.com",
+        "lastlogindate": "2017-02-18 11:43:39",
+        "lastloginip": "192.168.33.1",
+        "status": "active",
+        "title": "Mr",
+        "firstname": "Admin",
+        "lastname": "User",
+        "languageId": "1",
+        "datecreated": null,
+        "lastPayment": "2011-12-27 13:45:22",
+        "paidExpiryDate": null,
+        "storageLimitOverride": null
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+/account/package
+Provides the account restrictions inherited from the package associated to the account.
+
+URL Structure
+https://api.cyberfile.me/api/v2/account/package
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+Returns
+A JSON-encoded string including a label (label), max upload size (max_upload_size) and more.
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "id": "20",
+        "label": "Premium Account",
+        "max_upload_size": "1073741824",
+        "can_upload": "1",
+        "wait_between_downloads": "0",
+        "download_speed": "0",
+        "max_storage_bytes": "0",
+        "show_site_adverts": "0",
+        "show_upgrade_screen": "1",
+        "days_to_keep_inactive_files": "0",
+        "concurrent_uploads": "100",
+        "concurrent_downloads": "0",
+        "downloads_per_24_hours": "0",
+        "max_download_filesize_allowed": "0",
+        "max_remote_download_urls": "50",
+        "level_type": "paid user",
+        "on_upgrade_page": "0"
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+/file/upload
+Provides an interface to upload files. Note: There is currently no support for chunked uploads, this will be added at a later stage.
+
+URL Structure
+https://api.cyberfile.me/api/v2/file/upload
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+upload_file The uploaded file.
+folder_id A folder id within the users account. If left blank the file will be added to the root folder.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "File uploaded",
+"data": [
+        {
+                "name": "sample4_l.jpg",
+                "size": "149084",
+                "type": "application/octet-stream",
+                "error": null,
+                "url": "http://yoursite.com/2Vv",
+                "delete_url": "http://yoursite.com/2Vv~d?41efa710444abad11a8f4b5a90e4d746",
+                "info_url": "http://yoursite.com/2Vv~i?41efa710444abad11a8f4b5a90e4d746",
+                "delete_type": "DELETE",
+                "delete_hash": "41efa710444abad11a8f4b5a90e4d746",
+                "hash": "2f4105bc2c626232544275c2d890168b",
+                "stats_url": "http://yoursite.com/2Vv~s",
+                "short_url": "2Vv",
+                "file_id": "1253",
+                "unique_hash": "60b0be7e3b18de9a3f00d940a8e5a9834c6cdc0f49d40af64973be5ca504c4fd",
+                "url_html": "<a href="http://yoursite.com/2Vv" target="_blank" title="View image on File Upload Script">view sample4_l (1).jpg on File Upload Script</a>",
+                "url_bbcode": "[url]http://yoursite.com/2Vv[/url]"
+        }
+],
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Did not receive uploaded file.
+200	Filesize received was zero.
+200	PHP Curl module does not exist on your server/web hosting. It will need to be enable to use this upload feature.
+200	Error uploading file. No response received from:
+Note: Account upload restrictions are still in place, so you may also receive the same errors as shown on the site uploader.
+
+/file/download
+Generates a unique download url for a file.
+
+URL Structure
+https://api.cyberfile.me/api/v2/file/download
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+file_id The file id to generate the download url for.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "file_id": "1253",
+        "filename": "sample4_l.jpg",
+        "download_url": "http://yoursite.com/2Vv?download_token=c3e6289a23e9819d8663569da96087d0760ccc46d0f3ddbe3f6930b261777067"
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the file_id param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find file based on file_id.
+200	Could not generate download url.
+/file/info
+Provides meta data and urls of a file within a users account.
+
+URL Structure
+https://api.cyberfile.me/api/v2/file/info
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+file_id The file id to get information on.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "id": "1253",
+        "filename": "sample4_l.jpg",
+        "shortUrl": "2Vv",
+        ...
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the file_id param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find file based on file_id.
+/file/edit
+Provides meta data and urls of a file within a users account.
+
+URL Structure
+https://api.cyberfile.me/api/v2/file/edit
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+file_id The file id to update.
+filename The new filename. Leave blank to keep existing.
+fileType The new file type/mime type. Example: application/octet-stream. Leave blank to keep existing.
+folder_id The new folder id in the users account. Leave blank to keep existing.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "File successfully updated.",
+"data": {
+        "id": "1253",
+        "filename": "sample4.jpg",
+        "shortUrl": "2Vv",
+        ...
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the file_id param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find file based on file_id.
+/file/delete
+Delete an active file.
+
+URL Structure
+https://api.cyberfile.me/api/v2/file/delete
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+file_id The file id to delete.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "File successfully set as deleted.",
+"data": {
+        "id": "1253",
+        "filename": "sample4.jpg",
+        "shortUrl": "2Vv",
+        "status": "trash",
+        ...
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the file_id param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find file based on file_id.
+/file/move
+Move an active file to another folder.
+
+URL Structure
+https://api.cyberfile.me/api/v2/file/move
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+file_id The file id to move.
+new_parent_folder_id The folder id to move the file into.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "File successfully moved.",
+"data": {
+        "id": "1162",
+        "filename": "button_back_over.gif",
+        "shortUrl": "2U2",
+        ...
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the file_id param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find file based on file_id.
+200	Please provide the new_parent_folder_id param.
+200	Could not find the destination folder id defined by new_parent_folder_id.
+/file/copy
+Copy an active file to another folder.
+
+URL Structure
+https://api.cyberfile.me/api/v2/file/copy
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+file_id The file id to copy.
+copy_to_folder_id The folder id to copy the file into.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "File successfully copyied.",
+"original_file": {
+        "data": {
+                "id": "1162",
+                "filename": "button_back_over.gif",
+                "shortUrl": "2U2",
+                ...
+        }
+},
+"new_file": {
+        "data": {
+                "id": "1254",
+                "filename": "button_back_over.gif",
+                "shortUrl": "2Vw",
+                ...
+        }
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the file_id param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find file based on file_id.
+200	Please provide the copy_to_folder_id param.
+200	Could not find the destination folder id defined by copy_to_folder_id.
+/folder/create
+Create a new folder.
+
+URL Structure
+https://api.cyberfile.me/api/v2/folder/create
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+folder_name The new folder name.
+parent_id The folder parent id. Optional.
+is_public Whether a folder is available publicly or private only. 0 = Private, 1 = Unlisted, 2 = Public in site search. Default Private.
+access_password An MD5 hash of an access password. Expects 32 characters in length. Optional.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "Folder successfully created.",
+"data": {
+        "id": "125",
+        "parentId": null,
+        "folderName": "My New Folder",
+        "totalSize": "0",
+        "isPublic": "2",
+        "accessPassword": "d9729feb74992cc3482b350163a1a010",
+        "date_added": "2017-02-18 12:26:06",
+        "date_updated": null,
+        "url_folder": "http://yoursite.com/folder/125/My_New_Folder",
+        "total_downloads": 0,
+        "child_folder_count": 0,
+        "file_count": 0
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the folder_name param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+/folder/listing
+Returns a list of folders and files within the passed parent_folder_id. If this value is blank the root folder/file listing is returned.
+
+URL Structure
+https://api.cyberfile.me/api/v2/folder/listing
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+parent_folder_id The folder parent id. Optional.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "folders": [
+                {
+                        "id": "123",
+                        "parentId": null,
+                        "folderName": "My Folder 1",
+                        "totalSize": "868689",
+                        "isPublic": "1",
+                        "date_added": "2017-02-15 20:02:05",
+                        "date_updated": null,
+                        "url_folder": "http://yoursite.com/folder/123/My_Folder_1",
+                        "total_downloads": 5864,
+                        "child_folder_count": 1,
+                        "file_count": 0
+                },
+                {
+                        "id": "107",
+                        "parentId": null,
+                        "folderName": "My Folder 2",
+                        ...
+                },
+                {
+                        "id": "108",
+                        "parentId": null,
+                        "folderName": "My Folder 3",
+                        ....
+                }
+        ],
+        "files": [
+                {
+                        "id": "1161",
+                        "filename": "button_back.gif",
+                        "shortUrl": "2U1",
+                        "fileType": "image/gif",
+                        "extension": "gif",
+                        "fileSize": "1116",
+                        "status": "active",
+                        "downloads": "5865",
+                        "folderId": null,
+                        "keywords": "button,back,gif",
+                        "url_file": "http://yoursite.com/2U1"
+                },
+                {
+                        "id": "1163",
+                        "filename": "button_cancel.gif",
+                        "shortUrl": "2U3",
+                        ...
+                },
+                {
+                        "id": "1164",
+                        "filename": "button_cancel_over.gif",
+                        "shortUrl": "2U4",
+                        ...
+                }
+        ]
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+/folder/info
+Provides information for a specific folder id.
+
+URL Structure
+https://api.cyberfile.me/api/v2/folder/info
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+parent_folder_id The folder parent id. Optional.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "id": "123",
+        "parentId": null,
+        "folderName": "My Folder 1",
+        "totalSize": "868689",
+        "isPublic": "1",
+        "accessPassword": null,
+        "date_added": "2017-02-15 20:02:05",
+        "date_updated": null,
+        "url_folder": "http://yoursite.com/folder/123/My_Folder_1",
+        "total_downloads": 5864,
+        "child_folder_count": 1,
+        "file_count": 0
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find folder based on folder_id.
+/folder/edit
+Provides an interface to edit a folder.
+
+URL Structure
+https://api.cyberfile.me/api/v2/folder/edit
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+folder_id The folder id to update.
+folder_name The new folder name. Optional.
+parent_id The new parent id to move the folder. Optional.
+is_public Whether a folder is available publicly or private only. 0 = Private, 1 = Unlisted, 2 = Public in site search. Optional.
+access_password An MD5 hash of an access password. Expects 32 characters in length. Optional.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "Folder successfully updated.",
+"data": {
+        "id": "118",
+        "parentId": "117",
+        "folderName": "My New Folder Name",
+        "totalSize": "1024538",
+        "isPublic": "1",
+        "accessPassword": null,
+        "date_added": null,
+        "date_updated": null,
+        "url_folder": "http://yoursite.com/folder/118/My_New_Folder_Name",
+        "total_downloads": 0,
+        "child_folder_count": 0,
+        "file_count": 11
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find folder based on folder_id.
+/folder/delete
+Provides an interface to delete a folder.
+
+URL Structure
+https://api.cyberfile.me/api/v2/folder/delete
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+folder_id The folder id to update.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "Folder successfully set as deleted.",
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Could not find folder based on folder_id.
+/folder/move
+Provides an interface to move a folder.
+
+URL Structure
+https://api.cyberfile.me/api/v2/folder/move
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+folder_id The folder id to update.
+new_parent_folder_id The folder id to move the folder into.
+Returns
+A JSON-encoded string with the response message.
+
+Sample Successful JSON Response
+
+{
+"response": "Folder successfully moved.",
+"data": {
+        "id": "117",
+        "parentId": "99",
+        "folderName": "layered_png_files",
+        ...
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+200	Please provide the folder_id param.
+200	Could not find folder based on folder_id.
+/account/info
+Provides details of an account based on the account_id.
+
+URL Structure
+https://api.cyberfile.me/api/v2/account/info
+Parameters
+access_token The access token created previously by /authorize.
+account_id The account id returned by /authorize.
+Returns
+A JSON-encoded string including a username (username), account level id (level_id), email address (email) and more.
+
+Sample Successful JSON Response
+
+{
+"data": {
+        "id": "158642",
+        "username": "admin",
+        "level_id": "20",
+        "email": "email@yoursite.com",
+        "lastlogindate": "2017-02-18 11:43:39",
+        "lastloginip": "192.168.33.1",
+        "status": "active",
+        "title": "Mr",
+        "firstname": "Admin",
+        "lastname": "User",
+        "languageId": "1",
+        "datecreated": null,
+        "lastPayment": "2011-12-27 13:45:22",
+        "paidExpiryDate": null,
+        "storageLimitOverride": null
+},
+"_status": "success",
+"_datetime": "2026-06-11 13:18:41"
+}
+Possible Errors
+200	Please provide the access_token param.
+200	Please provide the account_id param.
+200	Could not validate access_token and account_id, please reauthenticate or try again.
+register
+report file
+link checker
+api
+contact

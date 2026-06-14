@@ -1,0 +1,264 @@
+{
+  "meta": {
+    "project": "VideoManager",
+    "one_liner": "Self-hosted FastAPI + React app that splits a video into lossless fMP4 chunks, fans them out to a small replica set of free file hosts, streams them back through a range-aware proxy into an MSE player, and keeps the copies alive via a standalone expiry refresher.",
+    "schema_version": "1.1.0",
+    "generated": "2026-06-14",
+    "state": "post-optimization: replica-set + concurrent uploads, progressive playback, FileDitch host integrated (free/no-auth/permanent, priority #1), Streamtape ON, and the expiry refresher (standalone CLI + optional in-app schedule).",
+    "how_to_use": "Load this file INSTEAD of re-reading source when you need to know what a module does, what it depends on, the data model, the API surface, or where a behavior lives. Only open the actual source file when you need exact code to edit it. After editing code, update the matching node/edge/issue here in the same change (see maintenance_protocol).",
+    "maintenance_protocol": "1) Add/modify a file -> add/update its entry in `modules` (path, role, exports, imports_internal, touches_services, notes). 2) Change an import graph edge -> update `edges`. 3) Change a Pydantic/TS model -> update `data_models`. 4) Add/change a route -> update `endpoints`. 5) Change the upload/playback/resume/refresh behavior -> update `flows`. 6) Fix or introduce a perf/correctness gap -> update `known_issues` (set \"status\":\"resolved\" when fixed). 7) Bump meta.generated and, for structural changes, meta.schema_version. Keep entries terse: one line of behavior per symbol."
+  },
+
+  "runtime": {
+    "backend_entrypoint": "backend/app/main.py:app (FastAPI)",
+    "run_api": "uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload  (run from repo root, .venv active)",
+    "run_refresher": "python -m backend.app.refresher --once   |   python -m backend.app.refresher --interval 21600   (standalone process; NOT started by the API)",
+    "startup_lifespan": "init_db() -> _check_deps(ffmpeg/ffprobe) -> resume_pending_jobs() OR clear_pending_jobs() (if CLEAR_PENDING_JOBS=1 or --clear-pending)",
+    "frontend_build": "cd frontend && npm install && npm run build  -> emits frontend/dist (served at /static, /assets; dashboard.html at /dashboard)",
+    "key_urls": {
+      "/dashboard": "upload + library SPA",
+      "/embed/{video_id}": "standalone player page (server-rendered HTML shell that loads the Vite player bundle)",
+      "/api/docs": "Swagger UI",
+      "/api/stream/{video_id}/manifest": "player manifest",
+      "/api/stream/{video_id}/chunk/{i}": "range-proxied chunk bytes (player now requests progressive sub-ranges)",
+      "/api/stream/st/{video_id}": "Streamtape virtual-stream proxy"
+    },
+    "system_deps": ["ffmpeg", "ffprobe"],
+    "python": "3.12",
+    "key_python_libs": ["fastapi", "uvicorn[standard]", "aiohttp", "pydantic-settings", "google-api-python-client"]
+  },
+
+  "datastores": {
+    "sqlite": {
+      "path": "data/index.sqlite (WAL mode)",
+      "schema_file": "backend/app/db/database.py:_DDL",
+      "tables": {
+        "videos": "video_id PK, name, description, duration_sec, width, height, fps, codec, upload_date, manifest_path. Search/index mirror of the manifest.",
+        "stars": "star_id PK, name, image_url, bio, created_at.",
+        "video_stars": "video_id<->star_id join (FK cascade).",
+        "jobs": "job_id PK, status, video_id, message, total_chunks, uploaded_chunks, error, bytes_per_sec, eta_sec, created_at, updated_at. Durable upload-job state.",
+        "job_checkpoints": "(job_id, phase) PK, data(JSON). Resumable per-phase upload state: phases 'meta','video_info','chunks_created','chunk_{N}','streamtape_parts'. ChunkLocation is serialized with model_dump(mode='json') so datetimes round-trip.",
+        "videos_fts": "FTS5 mirror of videos(name,description) kept in sync by triggers videos_ai/ad/au; backs ?search=."
+      }
+    },
+    "manifests": {
+      "path": "data/manifests/{video_id}.json",
+      "source_of_truth": true,
+      "atomic_write": "storage/manifest_store.save writes a .tmp then os.replace; the proxy and refresher never read a half-written file.",
+      "model": "Manifest (backend/app/models/__init__.py). SQLite `videos` is a derived index of this."
+    },
+    "tmp": {
+      "path": "data/tmp/{video_id}/  (uploads) and data/tmp/refresh_{video_id}/  (refresher scratch)",
+      "contents": "source.<ext>, thumbnail.<ext>, chunk_XXXX.mp4, st_parts/part_XXXX.mp4",
+      "lifecycle": "upload temp kept across restarts so interrupted jobs resume; deleted on successful completion. Refresher temp deleted at end of each video pass."
+    }
+  },
+
+  "config_keys": [
+    {"key": "chunk_size_bytes", "config_default": "6 MB", "env": "CHUNK_SIZE_BYTES (.env currently 8457280 ~8 MB)", "purpose": "target fMP4 chunk size; chunker snaps to nearest keyframe boundary; smaller = faster start/seeks"},
+    {"key": "replica_count", "config_default": "2", "purpose": "how many host copies to keep per chunk (durability vs upload speed); upload job uploads to this many, refresher maintains it"},
+    {"key": "upload_concurrency", "config_default": "3", "purpose": "how many chunks upload concurrently (pipelining across chunks)"},
+    {"key": "streamtape_enabled", "config_default": "True", "env": "STREAMTAPE_ENABLED", "purpose": "also split+upload the whole video to Streamtape (enables player ST mode); adds upload time"},
+    {"key": "fileditch_enabled", "config_default": "True", "env": "FILEDITCH_ENABLED", "purpose": "include the free/no-auth/permanent FileDitch host in the upload pool"},
+    {"key": "refresh_in_app", "config_default": "True", "env": "REFRESH_IN_APP", "purpose": "API server also runs the refresher on a schedule in-process; refresh_initial_delay_sec (120) before the first pass"},
+    {"key": "refresh_interval_sec", "config_default": "21600 (6h)", "purpose": "loop interval for the refresher daemon"},
+    {"key": "refresh_margin_days", "config_default": "7", "purpose": "re-upload a copy this many days before estimated expiry (currently expiry is mostly handled by the keep-alive verify pass)"},
+    {"key": "stream_host_priority", "config_default": "[gofile,filester,cyberfile,pixeldrain]", "env": "STREAM_HOST_PRIORITY (.env: [filester,pixeldrain,cyberfile])", "purpose": "order hosts are tried for streaming failover and the order upload targets/replica fills are chosen"},
+    {"key": "pixeldrain_priority", "config_default": "3", "purpose": "deprioritize pixeldrain (free tier rate-limits range requests)"},
+    {"key": "streamtape_part_size_bytes", "config_default": "8 GB", "purpose": "max bytes per Streamtape full-video part"},
+    {"key": "per-host credentials", "keys": ["gofile_*", "filester_*", "cyberfile_*", "pixeldrain_api_key", "streamtape_*", "buzzheavier_*", "gdrive_*"], "purpose": "auth for each external host; missing creds -> adapter excluded from pool"},
+    {"key": "clear_pending_jobs", "env": "CLEAR_PENDING_JOBS", "purpose": "discard interrupted jobs on startup instead of resuming"}
+  ],
+
+  "external_services": [
+    {"name": "fileditch", "adapter": "backend/app/hosts/fileditch.py", "role": "fMP4 chunk host (default anchor, priority #1)", "auth": "NONE (no key/account)", "range_support": "yes (206) on a signed CDN link scraped from the viewer page; a browser User-Agent is REQUIRED (the download host 502s otherwise)", "expiry_policy": "PERMANENT — new.fileditch.com keeps files indefinitely; 100GB max", "notes": "GOTCHA: upload returns an HTML VIEWER url (fileditchfiles.me/<path>), not the raw file. download_range scrapes that page for the time-limited direct link on a separate CDN host (?md5=&expires=) and caches it. Validated live 2026-06-14."},
+    {"name": "gofile", "adapter": "backend/app/hosts/gofile.py", "role": "fMP4 chunk host", "auth": "Bearer token", "range_support": "limited (free tier; direct-link created per file)", "expiry_policy": "free files reaped after inactivity (~10 days; policy in refresher/policy.py)"},
+    {"name": "filester", "adapter": "backend/app/hosts/filester.py", "role": "fMP4 chunk host (recommended for streaming)", "auth": "Bearer key", "range_support": "yes via short-lived CDN token (30-min token cached)", "expiry_policy": "AUTO-DELETES after 45 days idle; the refresher verify pass keeps it alive"},
+    {"name": "cyberfile", "adapter": "backend/app/hosts/cyberfile.py", "role": "fMP4 chunk host", "auth": "POST /authorize -> token (1h idle; cached 50min)", "range_support": "yes via per-request download_url", "expiry_policy": "persistent; max 1GB/file"},
+    {"name": "pixeldrain", "adapter": "backend/app/hosts/pixeldrain.py", "role": "fMP4 chunk host", "auth": "HTTP Basic (password=api_key)", "range_support": "yes but free tier rate-limits; sock_read=30 timeout for fast failover", "expiry_policy": "free files expire after inactivity (~60d est. in policy.py)"},
+    {"name": "streamtape", "adapter": "backend/app/hosts/streamtape.py", "role": "WHOLE-VIDEO parts host (opt-in; chunk_upload=False)", "auth": "?login&key", "range_support": "via dlticket->dl->CDN url (cached per file_id)", "expiry_policy": "persistent", "notes": "served by streaming/streamtape_proxy.py; only used when streamtape_enabled"},
+    {"name": "buzzheavier", "adapter": "backend/app/hosts/buzzheavier.py", "role": "declared whole-video host; chunk_upload=False", "auth": "Bearer account_id", "expiry_policy": "persistent-ish", "notes": "ISSUE-9 (open): still never uploaded to"},
+    {"name": "turbocr", "adapter": "backend/app/hosts/turbocr.py", "role": "STUB", "notes": "no server API; healthy()=False"},
+    {"name": "gdrive", "adapter": "backend/app/images/gdrive.py", "role": "thumbnail host (service account)", "auth": "service account JSON"},
+    {"name": "jpgsu", "adapter": "backend/app/images/jpgsu.py", "role": "thumbnail host STUB"}
+  ],
+
+  "data_models": {
+    "file": "backend/app/models/__init__.py",
+    "Manifest": {"fields": "video_id, name, description, duration_sec, resolution:Resolution?, upload_date, star_ids[], thumbnail:Thumbnail, chunks:[Chunk], streamtape_parts:[StreamtapePart]", "note": "persisted as JSON; source of truth"},
+    "Chunk": {"fields": "index, start_sec, end_sec, byte_size, filename, locations:[ChunkLocation]"},
+    "ChunkLocation": {"fields": "host, file_id, url, status:ok|failed|pending, uploaded_at?, last_verified_at?, expires_at?", "note": "expiry fields added for the refresher; Optional so pre-feature manifests still load. uploaded_at set by upload job; last_verified_at/expires_at maintained by refresher."},
+    "Resolution": {"fields": "width, height, fps, codec, mse_codec, bitrate_kbps?", "note": "mse_codec built in probe._build_mse_codec"},
+    "StreamtapePart": {"fields": "index, file_id, start_sec, end_sec, byte_size, filename"},
+    "Thumbnail": {"fields": "jpgsu:{url}?, gdrive:{url,file_id}?"},
+    "JobProgress": {"fields": "job_id, status:JobStatus, video_id?, message, total_chunks, uploaded_chunks, error?, bytes_per_sec?, eta_sec?, created_at, updated_at"},
+    "JobStatus": "queued|probing|chunking|uploading|finalising|done|error",
+    "VideoMeta": {"fields": "name, description, star_ids[]"},
+    "Star/StarCreate/StarUpdate": {"fields": "star_id, name, image_url?, bio?, created_at"},
+    "StreamManifest": {"fields": "video_id, name, description, duration_sec, resolution?, mse_codec, thumbnail, star_ids[], chunks:[StreamChunk], streamtape_parts[]", "note": "player-facing; built by streaming/proxy.get_stream_manifest"},
+    "StreamChunk": {"fields": "index, start_sec, end_sec, byte_size, hosts:[str] (ok hosts in priority order)"}
+  },
+
+  "modules": [
+    {"id": "backend/app/main.py", "layer": "app", "role": "FastAPI app factory, lifespan (init_db, dep check, resume/clear jobs, optional in-app refresher loop), CORS, router mounts, static dist mount, /dashboard, /api/health", "exports": ["app", "lifespan", "_run_refresher_loop", "_get_player_js"], "imports_internal": ["config", "db", "jobs.resume", "routers.uploads", "routers.videos", "routers.stars", "routers.embed", "streaming.proxy", "streaming.streamtape_proxy", "refresher (lazy, when refresh_in_app)"]},
+    {"id": "backend/app/config.py", "layer": "core", "role": "pydantic-settings Settings from .env; creates data dirs. Notable: replica_count(2), upload_concurrency(3), streamtape_enabled(True), fileditch_enabled(True), refresh_in_app(True)+refresh_initial_delay_sec, refresh_interval_sec, chunk_size_bytes default 6MB; stream_host_priority leads with fileditch", "exports": ["settings", "Settings"], "imports_internal": []},
+    {"id": "backend/app/models/__init__.py", "layer": "core", "role": "all Pydantic schemas (see data_models); ChunkLocation now carries expiry fields", "exports": ["Manifest", "Chunk", "ChunkLocation", "Resolution", "StreamtapePart", "Thumbnail", "JobProgress", "JobStatus", "LocationStatus", "HostName", "VideoMeta", "Star*", "StreamManifest", "StreamChunk"], "imports_internal": []},
+
+    {"id": "backend/app/db/database.py", "layer": "db", "role": "SQLite connection factory + schema DDL + idempotent migrations", "exports": ["get_conn", "init_db", "_DDL"], "imports_internal": ["config"]},
+    {"id": "backend/app/db/checkpoints.py", "layer": "db", "role": "per-job checkpoint CRUD (resumable uploads)", "exports": ["save_checkpoint", "load_checkpoint", "load_all_checkpoints", "clear_checkpoints"], "imports_internal": ["db.database"]},
+
+    {"id": "backend/app/jobs/queue.py", "layer": "jobs", "role": "in-process async job registry + progress persistence; cancellation via asyncio.Event", "exports": ["enqueue", "get_job", "list_jobs", "update_job", "cancel_job", "is_cancelled", "_jobs", "_persist"], "imports_internal": ["models", "db"]},
+    {"id": "backend/app/jobs/upload_job.py", "layer": "jobs", "role": "END-TO-END upload orchestration with per-phase checkpoints. Uploads each chunk to a REPLICA SET (settings.replica_count hosts, priority order, fill-on-failure) and runs chunks CONCURRENTLY (asyncio.Semaphore=upload_concurrency). Streamtape parts are OPT-IN (streamtape_enabled).", "exports": ["run_upload_job", "_run", "_upload_chunk (replica set)", "_upload_streamtape_parts", "_upload_thumbnail", "_do_chunk", "_cleanup_temp"], "imports_internal": ["jobs.queue", "config", "db.checkpoints", "hosts.registry", "hosts.streamtape", "images.gdrive", "images.jpgsu", "media.probe", "media.chunker", "media.splitter", "models", "storage"], "touches_services": ["replica-set chunk hosts", "streamtape (opt-in)", "gdrive", "jpgsu"], "notes": ["throughput/ETA computed from aggregate wall-clock bytes/sec across concurrent chunks"]},
+    {"id": "backend/app/jobs/resume.py", "layer": "jobs", "role": "startup resume/clear of interrupted jobs", "exports": ["resume_pending_jobs", "clear_pending_jobs", "_infer_video_id_from_mtime"], "imports_internal": ["jobs.queue", "jobs.upload_job", "config", "db", "models"]},
+    {"id": "backend/app/jobs/__init__.py", "layer": "jobs", "role": "re-export facade", "exports": ["enqueue", "get_job", "list_jobs", "run_upload_job", "cancel_job"], "imports_internal": ["jobs.queue", "jobs.upload_job"]},
+
+    {"id": "backend/app/refresher/policy.py", "layer": "refresher", "role": "per-host idle-deletion windows (HOST_IDLE_DAYS) + estimate_expiry(host,last_activity)", "exports": ["HOST_IDLE_DAYS", "idle_days", "estimate_expiry"], "imports_internal": []},
+    {"id": "backend/app/refresher/service.py", "layer": "refresher", "role": "refresh engine. Per chunk: VERIFY (1-byte fetch from every location = detect dead + keep-alive, updates last_verified_at/expires_at/status) then REPAIR (if healthy copies < replica_count: re-download from a healthy copy and re-upload to other hosts, rewriting ChunkLocation in place). Saves manifest atomically + reindexes.", "exports": ["refresh_video", "run_once", "run_forever", "_verify_location", "_download_chunk", "_upload_copy"], "imports_internal": ["config", "hosts.registry", "models", "storage", "storage.manifest_store", "refresher.policy"], "touches_services": ["all chunk hosts (verify+download+upload)"]},
+    {"id": "backend/app/refresher/__init__.py", "layer": "refresher", "role": "package facade", "exports": ["refresh_video", "run_once", "run_forever"], "imports_internal": ["refresher.service"]},
+    {"id": "backend/app/refresher/__main__.py", "layer": "refresher", "role": "CLI: --once | --interval | --video | --replica | --dry-run | --quiet -> run_once/run_forever", "exports": ["main"], "imports_internal": ["config", "refresher.service"]},
+
+    {"id": "backend/app/media/probe.py", "layer": "media", "role": "ffprobe metadata + keyframe index", "exports": ["probe", "extract_keyframes", "_build_mse_codec", "VideoInfo"], "imports_internal": []},
+    {"id": "backend/app/media/chunker.py", "layer": "media", "role": "lossless fMP4 chunker (-c copy)", "exports": ["chunk_video", "_compute_boundaries", "_extract_chunk", "ChunkResult"], "imports_internal": ["media.probe", "config"]},
+    {"id": "backend/app/media/splitter.py", "layer": "media", "role": "lossless regular-MP4 splitter for Streamtape parts", "exports": ["split_video", "PartResult"], "imports_internal": ["media.probe"]},
+    {"id": "backend/app/media/gpu.py", "layer": "media", "role": "detect nvenc/vaapi/cpu (informational; not on hot path)", "exports": ["detect", "HWAccel"], "imports_internal": []},
+
+    {"id": "backend/app/hosts/base.py", "layer": "hosts", "role": "FileHostAdapter ABC: upload / download_range / healthy / chunk_upload", "exports": ["FileHostAdapter"], "imports_internal": []},
+    {"id": "backend/app/hosts/registry.py", "layer": "hosts", "role": "instantiate adapters (FileDitch first); upload pool (chunk_upload=True, priority order) + per-chunk stream adapters + get(name)", "exports": ["get", "upload_adapters", "stream_adapters_for_chunk", "_ALL_ADAPTERS", "_BY_NAME"], "imports_internal": ["hosts.*", "config"]},
+    {"id": "backend/app/hosts/fileditch.py", "layer": "hosts", "role": "FileDitch adapter — free, no-auth, PERMANENT. upload() returns the HTML viewer url; download_range() scrapes the viewer page (browser UA) for the signed time-limited CDN link, caches it (_link_cache keyed by viewer url, until `expires`), and Range-GETs it (re-resolves once on non-2xx). Gated by fileditch_enabled.", "exports": ["FileDitchAdapter", "_resolve_direct", "_extract_direct", "_parse_expires"], "imports_internal": ["hosts.base", "config"], "touches_services": ["fileditch"]},
+    {"id": "backend/app/hosts/gofile.py", "layer": "hosts", "role": "Gofile adapter", "exports": ["GofileAdapter"], "imports_internal": ["hosts.base", "config"], "touches_services": ["gofile"]},
+    {"id": "backend/app/hosts/filester.py", "layer": "hosts", "role": "Filester adapter (CDN token cache)", "exports": ["FilesterAdapter"], "imports_internal": ["hosts.base", "config"], "touches_services": ["filester"]},
+    {"id": "backend/app/hosts/cyberfile.py", "layer": "hosts", "role": "Cyberfile adapter (token auth)", "exports": ["CyberfileAdapter"], "imports_internal": ["hosts.base", "config"], "touches_services": ["cyberfile"]},
+    {"id": "backend/app/hosts/pixeldrain.py", "layer": "hosts", "role": "Pixeldrain adapter (Basic auth; fast failover timeout)", "exports": ["PixeldrainAdapter"], "imports_internal": ["hosts.base", "config"], "touches_services": ["pixeldrain"]},
+    {"id": "backend/app/hosts/streamtape.py", "layer": "hosts", "role": "Streamtape adapter (whole-video parts; dlticket flow; url cache)", "exports": ["StreamtapeAdapter", "_dl_url_cache"], "imports_internal": ["hosts.base", "config"], "touches_services": ["streamtape"]},
+    {"id": "backend/app/hosts/buzzheavier.py", "layer": "hosts", "role": "Buzzheavier adapter (PUT upload)", "exports": ["BuzzheavierAdapter"], "imports_internal": ["hosts.base", "config"], "touches_services": ["buzzheavier"], "notes": ["ISSUE-9 (open): not wired into any upload path"]},
+    {"id": "backend/app/hosts/turbocr.py", "layer": "hosts", "role": "stub adapter", "exports": ["TurboCRAdapter"], "imports_internal": ["hosts.base"]},
+
+    {"id": "backend/app/images/base.py", "layer": "images", "role": "ImageHostAdapter ABC", "exports": ["ImageHostAdapter"], "imports_internal": []},
+    {"id": "backend/app/images/gdrive.py", "layer": "images", "role": "Google Drive thumbnail upload (sync client in executor)", "exports": ["GDriveAdapter"], "imports_internal": ["images.base", "config"], "touches_services": ["gdrive"]},
+    {"id": "backend/app/images/jpgsu.py", "layer": "images", "role": "jpg.su thumbnail stub", "exports": ["JpgSuAdapter"], "imports_internal": ["images.base"]},
+
+    {"id": "backend/app/storage/manifest_store.py", "layer": "storage", "role": "read/write/delete per-video JSON manifests (source of truth); save() is ATOMIC (temp + os.replace)", "exports": ["save", "load", "delete", "all_ids"], "imports_internal": ["config", "models"]},
+    {"id": "backend/app/storage/index.py", "layer": "storage", "role": "sync a Manifest into SQLite videos + video_stars", "exports": ["upsert", "remove"], "imports_internal": ["db", "models"]},
+    {"id": "backend/app/storage/__init__.py", "layer": "storage", "role": "re-export facade", "imports_internal": ["storage.manifest_store", "storage.index"]},
+
+    {"id": "backend/app/routers/uploads.py", "layer": "routers", "role": "POST /api/uploads (save temp + enqueue), GET list, GET progress, DELETE cancel", "exports": ["router"], "imports_internal": ["config", "jobs", "models"]},
+    {"id": "backend/app/routers/videos.py", "layer": "routers", "role": "GET /api/videos (fts/star/paged), GET/PATCH/DELETE /api/videos/{id}", "exports": ["router"], "imports_internal": ["db", "models", "storage"]},
+    {"id": "backend/app/routers/stars.py", "layer": "routers", "role": "stars CRUD", "exports": ["router"], "imports_internal": ["db", "models"]},
+    {"id": "backend/app/routers/embed.py", "layer": "routers", "role": "GET /embed/{id} -> HTML shell that injects __VM_CONFIG__ and loads the player bundle", "exports": ["router", "_player_js"], "imports_internal": ["storage", "main._get_player_js"]},
+
+    {"id": "backend/app/streaming/proxy.py", "layer": "streaming", "role": "MSE streaming: GET /manifest (StreamManifest) + GET /chunk/{i} (range proxy with multi-host failover incl. short-read detection)", "exports": ["router", "stream_chunk", "get_stream_manifest", "_failover_stream", "_parse_range"], "imports_internal": ["hosts.registry", "models", "storage", "config"]},
+    {"id": "backend/app/streaming/streamtape_proxy.py", "layer": "streaming", "role": "GET /stream/st/{id}: maps virtual byte offset across Streamtape parts and range-proxies one part per response", "exports": ["router", "streamtape_proxy", "_part_for_offset", "_total_size", "_parse_range"], "imports_internal": ["hosts.streamtape", "models", "storage"]},
+    {"id": "backend/app/streaming/resolver.py", "layer": "streaming", "role": "resolve(timestamp,chunks)->ResolvedPosition", "exports": ["resolve", "ResolvedPosition"], "imports_internal": ["models"], "notes": ["ISSUE-10 (open): not imported server-side; player uses seek.ts"]},
+
+    {"id": "frontend/src/api/client.ts", "layer": "fe-player", "role": "player API types + fetchManifest + chunkUrl + streamtapeProxyUrl", "exports": ["fetchManifest", "chunkUrl", "streamtapeProxyUrl", "StreamManifest", "StreamChunk", "StreamtapePart", "Resolution", "Thumbnail"], "imports_internal": []},
+    {"id": "frontend/src/player/seek.ts", "layer": "fe-player", "role": "resolve(timestamp,chunks)->ResolvedPosition (mirror of backend resolver)", "exports": ["resolve", "ResolvedPosition"], "imports_internal": ["api/client(types)"]},
+    {"id": "frontend/src/player/useChunkStream.ts", "layer": "fe-player", "role": "MSE engine: sequential worker streams each chunk via fetch+ReadableStream reader and appends slices PROGRESSIVELY (timestampOffset set only on first slice of a chunk); per-chunk in-memory cache (full buffer assembled from slices); seek cancels+restarts; PREFETCH_AHEAD=3", "exports": ["useChunkStream"], "imports_internal": ["api/client", "player/seek"], "notes": ["ISSUE-4 resolved: progressive append means playback starts before the whole chunk arrives", "ISSUE-5 mitigated: still one worker, but progressive append + smaller chunks remove the worst stalls"]},
+    {"id": "frontend/src/player/VideoPlayer.tsx", "layer": "fe-player", "role": "player UI; loads manifest; MSE vs Streamtape toggle (ST button when streamtape_parts present); keyboard shortcuts; controls", "exports": ["VideoPlayer"], "imports_internal": ["api/client", "player/useChunkStream", "player/controls/SeekBar"]},
+    {"id": "frontend/src/player/controls/SeekBar.tsx", "layer": "fe-player", "role": "scrubber with buffered-range painting", "exports": ["SeekBar"], "imports_internal": []},
+    {"id": "frontend/src/player/controls/ResolutionBadge.tsx", "layer": "fe-player", "role": "quality badge component", "exports": ["ResolutionBadge"], "imports_internal": [], "notes": ["not imported by VideoPlayer -> possibly legacy"]},
+    {"id": "frontend/src/player/controls/BufferLoader.tsx", "layer": "fe-player", "role": "spinner component", "exports": ["BufferLoader"], "imports_internal": [], "notes": ["not imported by VideoPlayer -> possibly legacy"]},
+    {"id": "frontend/src/main.tsx", "layer": "fe-player", "role": "player entry (index.html)", "exports": [], "imports_internal": ["player/VideoPlayer"]},
+    {"id": "frontend/src/embed/embed.ts", "layer": "fe-player", "role": "embed bundle entry (vite.embed.config.ts)", "exports": [], "imports_internal": ["player/VideoPlayer"]},
+
+    {"id": "frontend/src/dashboard/api.ts", "layer": "fe-dash", "role": "dashboard API client", "exports": ["listJobs", "getJob", "listVideos", "deleteVideo", "startUpload", "cancelJob", "JobProgress", "VideoSummary"], "imports_internal": []},
+    {"id": "frontend/src/dashboard/Dashboard.tsx", "layer": "fe-dash", "role": "dashboard shell", "exports": ["Dashboard"], "imports_internal": ["dashboard/api", "dashboard/UploadForm", "dashboard/VideoList", "dashboard/JobCard"]},
+    {"id": "frontend/src/dashboard/UploadForm.tsx", "layer": "fe-dash", "role": "drag-drop upload form -> startUpload", "exports": ["UploadForm"], "imports_internal": ["dashboard/api"]},
+    {"id": "frontend/src/dashboard/JobCard.tsx", "layer": "fe-dash", "role": "live job progress card (polls getJob; cancel)", "exports": ["JobCard"], "imports_internal": ["dashboard/api"]},
+    {"id": "frontend/src/dashboard/VideoList.tsx", "layer": "fe-dash", "role": "video library grid (open player, delete)", "exports": ["VideoList"], "imports_internal": ["dashboard/api"]},
+    {"id": "frontend/src/dashboard/main.tsx", "layer": "fe-dash", "role": "dashboard entry (dashboard.html)", "exports": [], "imports_internal": ["dashboard/Dashboard"]}
+  ],
+
+  "endpoints": [
+    {"method": "POST", "path": "/api/uploads", "handler": "routers/uploads.start_upload", "purpose": "ingest video(+thumb)+meta, save to tmp, enqueue job; returns {job_id, video_id} (202)"},
+    {"method": "GET", "path": "/api/uploads", "handler": "routers/uploads.list_upload_jobs", "purpose": "list jobs (mem+DB)"},
+    {"method": "GET", "path": "/api/uploads/{job_id}", "handler": "routers/uploads.get_upload_progress", "purpose": "poll job progress"},
+    {"method": "DELETE", "path": "/api/uploads/{job_id}", "handler": "routers/uploads.cancel_upload", "purpose": "cancel job"},
+    {"method": "GET", "path": "/api/videos", "handler": "routers/videos.list_videos", "purpose": "list/search/filter/paginate"},
+    {"method": "GET", "path": "/api/videos/{video_id}", "handler": "routers/videos.get_video", "purpose": "full Manifest"},
+    {"method": "PATCH", "path": "/api/videos/{video_id}", "handler": "routers/videos.update_video", "purpose": "edit name/description/star_ids"},
+    {"method": "DELETE", "path": "/api/videos/{video_id}", "handler": "routers/videos.delete_video", "purpose": "delete manifest + index row"},
+    {"method": "GET/POST/PATCH/DELETE", "path": "/api/stars[/{id}]", "handler": "routers/stars.*", "purpose": "stars CRUD"},
+    {"method": "GET", "path": "/api/stream/{video_id}/manifest", "handler": "streaming/proxy.get_stream_manifest", "purpose": "player StreamManifest"},
+    {"method": "GET", "path": "/api/stream/{video_id}/chunk/{chunk_index}", "handler": "streaming/proxy.stream_chunk", "purpose": "range-proxied chunk bytes with host failover"},
+    {"method": "GET", "path": "/api/stream/st/{video_id}", "handler": "streaming/streamtape_proxy.streamtape_proxy", "purpose": "Streamtape virtual stream"},
+    {"method": "GET", "path": "/embed/{video_id}", "handler": "routers/embed.embed_player", "purpose": "player HTML shell"},
+    {"method": "GET", "path": "/dashboard", "handler": "main.dashboard", "purpose": "dashboard SPA"},
+    {"method": "GET", "path": "/api/health", "handler": "main.health", "purpose": "health check"}
+  ],
+
+  "flows": {
+    "upload": [
+      "routers/uploads.start_upload: stream video+thumb to data/tmp/{video_id}/, build VideoMeta, enqueue(_job_coro), persist video_id",
+      "jobs/upload_job.run_upload_job -> _run; checkpoint 'meta'",
+      "PROBE: media.probe.probe + extract_keyframes -> VideoInfo; checkpoint 'video_info'",
+      "CHUNK: media.chunker.chunk_video (keyframe-aligned ~chunk_size_bytes lossless fMP4); checkpoint 'chunks_created'",
+      "UPLOAD: _upload_one per chunk under asyncio.Semaphore(upload_concurrency); _upload_chunk uploads to settings.replica_count hosts (priority order leads with fileditch, fill on failure); checkpoint 'chunk_{i}' = [ChunkLocation]; aggregate bytes/sec + ETA",
+      "STREAMTAPE (streamtape_enabled, default True): split_video into <=8GB parts -> upload sequentially -> [StreamtapePart]; checkpoint 'streamtape_parts'",
+      "THUMBNAIL: gdrive + jpgsu (best-effort)",
+      "FINALIZE: build Manifest -> storage.save (atomic JSON) + storage.upsert (SQLite) -> done -> clear_checkpoints + _cleanup_temp"
+    ],
+    "playback_mse": [
+      "GET /embed/{id} -> HTML shell loads player bundle",
+      "VideoPlayer.fetchManifest -> GET /manifest (ok hosts per chunk in priority order)",
+      "useChunkStream: open MediaSource, addSourceBuffer(mse_codec), start sequential worker at chunk 0",
+      "worker: GET /chunk/{i}, read response body via ReadableStream; push each slice to append queue (timestampOffset set on first slice only); proxy.stream_chunk serves bytes from first ok host with failover",
+      "playback begins after the first slice (not the whole chunk); full chunk assembled into the cache for re-seeks",
+      "seek: seek.resolve target chunk; cancel worker (gen + AbortController); flush SourceBuffer if not buffered; restart worker at target"
+    ],
+    "playback_streamtape": [
+      "VideoPlayer ST toggle sets <video src>=/stream/st/{id}; browser Range -> streamtape_proxy maps virtual offset to (part, local offset) -> StreamtapeAdapter ticket+CDN range -> one part per response"
+    ],
+    "resume": [
+      "lifespan -> resume_pending_jobs: select non-terminal jobs; require 'meta' + tmp source; rebuild JobProgress+VideoMeta; enqueue; _run skips checkpointed phases"
+    ],
+    "expiry_refresh": [
+      "Standalone: python -m backend.app.refresher (--once or loop). ALSO runs in-process from the API lifespan when refresh_in_app=True (main._run_refresher_loop waits refresh_initial_delay_sec then run_forever).",
+      "run_once -> for each video -> refresh_video:",
+      "VERIFY each ChunkLocation: _verify_location fetches 1 byte (detects dead links AND resets idle-deletion timers = keep-alive); set status, last_verified_at, expires_at(=estimate_expiry from policy.py)",
+      "REPAIR: if healthy copies < replica_count -> _download_chunk from a healthy copy to temp, _upload_copy to other hosts (priority order, not already used), set chunk.locations = healthy + new copies (drops dead ones, rewrites file_id/url)",
+      "save manifest atomically + upsert SQLite; the streaming proxy immediately serves the refreshed URLs"
+    ]
+  },
+
+  "edges": [
+    {"from": "backend/app/main.py", "to": ["backend/app/jobs/resume.py", "backend/app/routers/uploads.py", "backend/app/routers/videos.py", "backend/app/routers/stars.py", "backend/app/routers/embed.py", "backend/app/streaming/proxy.py", "backend/app/streaming/streamtape_proxy.py", "backend/app/db/database.py", "backend/app/refresher/__init__.py"], "type": "imports"},
+    {"from": "backend/app/jobs/upload_job.py", "to": ["backend/app/media/probe.py", "backend/app/media/chunker.py", "backend/app/media/splitter.py", "backend/app/hosts/registry.py", "backend/app/hosts/streamtape.py", "backend/app/images/gdrive.py", "backend/app/images/jpgsu.py", "backend/app/storage/manifest_store.py", "backend/app/storage/index.py", "backend/app/jobs/queue.py", "backend/app/db/checkpoints.py"], "type": "imports"},
+    {"from": "backend/app/jobs/resume.py", "to": ["backend/app/jobs/upload_job.py", "backend/app/jobs/queue.py", "backend/app/db/checkpoints.py"], "type": "imports"},
+    {"from": "backend/app/refresher/service.py", "to": ["backend/app/hosts/registry.py", "backend/app/storage/manifest_store.py", "backend/app/storage/index.py", "backend/app/refresher/policy.py", "backend/app/config.py", "backend/app/models/__init__.py"], "type": "imports"},
+    {"from": "backend/app/refresher/__main__.py", "to": ["backend/app/refresher/service.py", "backend/app/config.py"], "type": "imports"},
+    {"from": "backend/app/hosts/registry.py", "to": ["backend/app/hosts/fileditch.py", "backend/app/hosts/gofile.py", "backend/app/hosts/filester.py", "backend/app/hosts/cyberfile.py", "backend/app/hosts/pixeldrain.py", "backend/app/hosts/streamtape.py", "backend/app/hosts/buzzheavier.py", "backend/app/hosts/turbocr.py"], "type": "instantiates"},
+    {"from": "backend/app/streaming/proxy.py", "to": ["backend/app/hosts/registry.py", "backend/app/storage/manifest_store.py"], "type": "imports"},
+    {"from": "backend/app/streaming/streamtape_proxy.py", "to": ["backend/app/hosts/streamtape.py", "backend/app/storage/manifest_store.py"], "type": "imports"},
+    {"from": "backend/app/routers/videos.py", "to": ["backend/app/storage/manifest_store.py", "backend/app/storage/index.py", "backend/app/db/database.py"], "type": "imports"},
+    {"from": "backend/app/routers/uploads.py", "to": ["backend/app/jobs/queue.py", "backend/app/jobs/upload_job.py"], "type": "imports"},
+    {"from": "backend/app/storage/index.py", "to": ["backend/app/db/database.py"], "type": "imports"},
+    {"from": "frontend/src/player/VideoPlayer.tsx", "to": ["frontend/src/player/useChunkStream.ts", "frontend/src/api/client.ts", "frontend/src/player/controls/SeekBar.tsx"], "type": "imports"},
+    {"from": "frontend/src/player/useChunkStream.ts", "to": ["frontend/src/api/client.ts", "frontend/src/player/seek.ts"], "type": "imports"},
+    {"from": "frontend/src/dashboard/Dashboard.tsx", "to": ["frontend/src/dashboard/api.ts", "frontend/src/dashboard/UploadForm.tsx", "frontend/src/dashboard/VideoList.tsx", "frontend/src/dashboard/JobCard.tsx"], "type": "imports"}
+  ],
+
+  "known_issues": [
+    {"id": "ISSUE-1", "status": "resolved", "area": "upload-speed", "resolution": "upload_job._upload_chunk now uploads to settings.replica_count hosts (default 2) instead of all; fills further hosts only on failure"},
+    {"id": "ISSUE-2", "status": "resolved", "area": "upload-speed", "resolution": "chunks upload concurrently under asyncio.Semaphore(settings.upload_concurrency)"},
+    {"id": "ISSUE-3", "status": "mitigated", "area": "upload-speed", "resolution": "Streamtape is now a toggle (streamtape_enabled). User enabled it (default True) for the player ST mode, accepting the extra upload time; set STREAMTAPE_ENABLED=0 to skip"},
+    {"id": "ISSUE-4", "status": "resolved", "area": "playback-buffering", "resolution": "useChunkStream streams the chunk response via ReadableStream and appends slices progressively; playback starts before the whole chunk arrives. chunk_size_bytes default also lowered to 6MB"},
+    {"id": "ISSUE-5", "status": "mitigated", "area": "playback-buffering", "note": "still a single sequential worker; progressive append + smaller chunks remove the worst stalls. Could add parallel range fetches later if needed"},
+    {"id": "ISSUE-6", "status": "open", "area": "playback-buffering", "symptom": "repeat plays/seeks re-hit slow rate-limited hosts", "note": "user opted not to add a proxy cache; the per-chunk in-memory cache covers within-session re-seeks", "fix_idea": "optional on-disk LRU chunk cache in streaming/proxy.py"},
+    {"id": "ISSUE-7", "status": "resolved", "area": "config", "resolution": "chunk_size_bytes default set to 6MB and documented; .env still overrides (currently ~8MB)"},
+    {"id": "ISSUE-8", "status": "resolved", "area": "durability/expiry", "resolution": "backend/app/refresher: verify pass keeps idle-expiry hosts alive and detects dead links; repair pass re-downloads from a healthy copy and re-uploads to maintain replica_count, rewriting ChunkLocation file_id/url. ChunkLocation gained uploaded_at/last_verified_at/expires_at"},
+    {"id": "ISSUE-9", "status": "open", "area": "dead-config", "symptom": "Buzzheavier configured but never uploaded to", "fix_idea": "wire into replica fill path or remove"},
+    {"id": "ISSUE-10", "status": "open", "area": "dead-code", "symptom": "streaming/resolver.py unused server-side", "fix_idea": "remove or repurpose"},
+    {"id": "ISSUE-11", "status": "open", "area": "upload-speed/robustness", "symptom": "persistently-failing hosts retried each chunk", "fix_idea": "probe host health once per job and skip dead hosts"}
+  ],
+
+  "glossary": {
+    "fMP4": "fragmented MP4 (frag_keyframe+empty_moov+faststart+default_base_moof) so each chunk is independently appendable to an MSE SourceBuffer",
+    "MSE": "Media Source Extensions; JS feeds media bytes to <video> via SourceBuffer",
+    "chunk": "a lossless fMP4 slice (~chunk_size_bytes) uploaded to chunk hosts and streamed by /chunk/{i}",
+    "part": "a lossless regular MP4 slice (<=8GB) uploaded only to Streamtape (opt-in) and stitched by the ST proxy",
+    "location": "one (host, file_id, url, status, expiry fields) record for where a chunk's bytes live; a chunk has `replica_count` of them",
+    "replica_count": "how many host copies of each chunk to keep; set on upload and maintained by the refresher",
+    "manifest": "data/manifests/{id}.json; the source of truth; SQLite videos is a derived index",
+    "refresher": "standalone process (python -m backend.app.refresher) that verifies/keeps-alive/repairs chunk copies"
+  }
+}

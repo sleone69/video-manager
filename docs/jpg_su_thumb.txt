@@ -1,0 +1,11 @@
+Upload plugin
+Add image uploading to your website, blog or forum by installing our upload plugin. It provides image uploading to any website by placing a button that will allow your users to directly upload images to our service and it will automatically handle the codes needed for insertion. All features included like drag and drop, remote upload, image resizing and more.
+
+Supported software
+The plugin works in any website with user-editable content and for supported software, it will place an upload button that will match the target editor toolbar so no extra customization is needed.
+
+Add it to your website
+Copy and paste the plugin code into your website HTML code (preferably inside the head section). There are plenty options to make it fit better to your needs.
+
+<script async src="//jpg6.su/sdk/pup.js" data-url="https://jpg6.su/upload"></script>
+Upload images
