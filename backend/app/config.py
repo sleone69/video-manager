@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     replica_count: int = 2
     # How many chunks to upload concurrently (pipelining across chunks).
     upload_concurrency: int = 3
+    # Max size of each browser→backend upload part. Kept well under Cloudflare's
+    # ~100 MB request-body cap so uploads work through the tunnel; the dashboard
+    # slices the file into parts of this size and the backend reassembles them.
+    upload_part_size_bytes: int = 48 * 1024 * 1024  # 48 MB
     # When True, additionally split the whole video into <=part-size parts and
     # upload them to Streamtape (enables the player's ST streaming mode). Note this
     # re-uploads the entire video on top of the fMP4 chunks, so uploads take longer.

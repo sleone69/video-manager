@@ -59,6 +59,7 @@
     {"key": "chunk_size_bytes", "config_default": "6 MB", "env": "CHUNK_SIZE_BYTES (.env currently 8457280 ~8 MB)", "purpose": "target fMP4 chunk size; chunker snaps to nearest keyframe boundary; smaller = faster start/seeks"},
     {"key": "replica_count", "config_default": "2", "purpose": "how many host copies to keep per chunk (durability vs upload speed); upload job uploads to this many, refresher maintains it"},
     {"key": "upload_concurrency", "config_default": "3", "purpose": "how many chunks upload concurrently (pipelining across chunks)"},
+    {"key": "upload_part_size_bytes", "config_default": "48 MB", "env": "UPLOAD_PART_SIZE_BYTES", "purpose": "max size of each browser→backend chunked-upload part; kept < Cloudflare's ~100MB body cap so uploads work through the tunnel"},
     {"key": "streamtape_enabled", "config_default": "True", "env": "STREAMTAPE_ENABLED", "purpose": "also split+upload the whole video to Streamtape (enables player ST mode); adds upload time"},
     {"key": "fileditch_enabled", "config_default": "True", "env": "FILEDITCH_ENABLED", "purpose": "include the free/no-auth/permanent FileDitch host in the upload pool"},
     {"key": "refresh_in_app", "config_default": "True", "env": "REFRESH_IN_APP", "purpose": "API server also runs the refresher on a schedule in-process; refresh_initial_delay_sec (120) before the first pass"},
@@ -147,7 +148,7 @@
     {"id": "backend/app/storage/index.py", "layer": "storage", "role": "sync a Manifest into SQLite videos + video_stars", "exports": ["upsert", "remove"], "imports_internal": ["db", "models"]},
     {"id": "backend/app/storage/__init__.py", "layer": "storage", "role": "re-export facade", "imports_internal": ["storage.manifest_store", "storage.index"]},
 
-    {"id": "backend/app/routers/uploads.py", "layer": "routers", "role": "POST /api/uploads (save temp + enqueue), GET list, GET progress, DELETE cancel", "exports": ["router"], "imports_internal": ["config", "jobs", "models"]},
+    {"id": "backend/app/routers/uploads.py", "layer": "routers", "role": "single-shot POST /api/uploads + chunked upload (init/part/thumbnail/complete; _assemble_parts concatenates parts into source<suffix> in a background job), GET list, GET progress, DELETE cancel", "exports": ["router", "_assemble_parts"], "imports_internal": ["config", "jobs", "models"]},
     {"id": "backend/app/routers/videos.py", "layer": "routers", "role": "GET /api/videos (fts/star/paged), GET/PATCH/DELETE /api/videos/{id}", "exports": ["router"], "imports_internal": ["db", "models", "storage"]},
     {"id": "backend/app/routers/stars.py", "layer": "routers", "role": "stars CRUD", "exports": ["router"], "imports_internal": ["db", "models"]},
     {"id": "backend/app/routers/embed.py", "layer": "routers", "role": "GET /embed/{id} -> HTML shell that injects __VM_CONFIG__ and loads the player bundle", "exports": ["router", "_player_js"], "imports_internal": ["storage", "main._get_player_js"]},
@@ -166,16 +167,20 @@
     {"id": "frontend/src/main.tsx", "layer": "fe-player", "role": "player entry (index.html)", "exports": [], "imports_internal": ["player/VideoPlayer"]},
     {"id": "frontend/src/embed/embed.ts", "layer": "fe-player", "role": "embed bundle entry (vite.embed.config.ts)", "exports": [], "imports_internal": ["player/VideoPlayer"]},
 
-    {"id": "frontend/src/dashboard/api.ts", "layer": "fe-dash", "role": "dashboard API client", "exports": ["listJobs", "getJob", "listVideos", "deleteVideo", "startUpload", "cancelJob", "JobProgress", "VideoSummary"], "imports_internal": []},
+    {"id": "frontend/src/dashboard/api.ts", "layer": "fe-dash", "role": "dashboard API client incl. chunked upload (initUpload/uploadPart/uploadThumbnail/completeUpload)", "exports": ["listJobs", "getJob", "listVideos", "deleteVideo", "startUpload", "cancelJob", "initUpload", "uploadPart", "uploadThumbnail", "completeUpload", "JobProgress", "VideoSummary", "UploadInit"], "imports_internal": []},
     {"id": "frontend/src/dashboard/Dashboard.tsx", "layer": "fe-dash", "role": "dashboard shell", "exports": ["Dashboard"], "imports_internal": ["dashboard/api", "dashboard/UploadForm", "dashboard/VideoList", "dashboard/JobCard"]},
-    {"id": "frontend/src/dashboard/UploadForm.tsx", "layer": "fe-dash", "role": "drag-drop upload form -> startUpload", "exports": ["UploadForm"], "imports_internal": ["dashboard/api"]},
+    {"id": "frontend/src/dashboard/UploadForm.tsx", "layer": "fe-dash", "role": "drag-drop upload form; slices the file into part_size blobs and uploads via init→part×N→(thumbnail)→complete (chunked, tunnel-safe), then bootstraps the JobCard", "exports": ["UploadForm"], "imports_internal": ["dashboard/api"]},
     {"id": "frontend/src/dashboard/JobCard.tsx", "layer": "fe-dash", "role": "live job progress card (polls getJob; cancel)", "exports": ["JobCard"], "imports_internal": ["dashboard/api"]},
     {"id": "frontend/src/dashboard/VideoList.tsx", "layer": "fe-dash", "role": "video library grid (open player, delete)", "exports": ["VideoList"], "imports_internal": ["dashboard/api"]},
     {"id": "frontend/src/dashboard/main.tsx", "layer": "fe-dash", "role": "dashboard entry (dashboard.html)", "exports": [], "imports_internal": ["dashboard/Dashboard"]}
   ],
 
   "endpoints": [
-    {"method": "POST", "path": "/api/uploads", "handler": "routers/uploads.start_upload", "purpose": "ingest video(+thumb)+meta, save to tmp, enqueue job; returns {job_id, video_id} (202)"},
+    {"method": "POST", "path": "/api/uploads", "handler": "routers/uploads.start_upload", "purpose": "single-shot multipart ingest (CLI/localhost); save to tmp, enqueue job; returns {job_id, video_id}"},
+    {"method": "POST", "path": "/api/uploads/init", "handler": "routers/uploads.init_chunked_upload", "purpose": "begin a chunked upload; returns {upload_id, part_size}"},
+    {"method": "PUT", "path": "/api/uploads/{upload_id}/part/{index}", "handler": "routers/uploads.upload_part", "purpose": "stream one raw file part to disk (each < Cloudflare cap)"},
+    {"method": "POST", "path": "/api/uploads/{upload_id}/thumbnail", "handler": "routers/uploads.upload_session_thumbnail", "purpose": "upload the thumbnail for a chunked session"},
+    {"method": "POST", "path": "/api/uploads/{upload_id}/complete", "handler": "routers/uploads.complete_chunked_upload", "purpose": "validate parts, then reassemble + enqueue job in the background (returns {job_id} immediately)"},
     {"method": "GET", "path": "/api/uploads", "handler": "routers/uploads.list_upload_jobs", "purpose": "list jobs (mem+DB)"},
     {"method": "GET", "path": "/api/uploads/{job_id}", "handler": "routers/uploads.get_upload_progress", "purpose": "poll job progress"},
     {"method": "DELETE", "path": "/api/uploads/{job_id}", "handler": "routers/uploads.cancel_upload", "purpose": "cancel job"},
@@ -203,6 +208,14 @@
       "STREAMTAPE (streamtape_enabled, default True): split_video into <=8GB parts -> upload sequentially -> [StreamtapePart]; checkpoint 'streamtape_parts'",
       "THUMBNAIL: gdrive + jpgsu (best-effort)",
       "FINALIZE: build Manifest -> storage.save (atomic JSON) + storage.upsert (SQLite) -> done -> clear_checkpoints + _cleanup_temp"
+    ],
+    "chunked_upload": [
+      "Used by the dashboard (works through the Cloudflare tunnel — each request stays < ~100MB).",
+      "POST /api/uploads/init {name,description,filename} -> {upload_id(=video_id), part_size}; creates data/tmp/{video_id}/parts/ + upload_session.json",
+      "Browser slices the File into part_size blobs; PUT /api/uploads/{id}/part/{i} streams each to parts/part_{i:06d} (one request per part)",
+      "optional POST /api/uploads/{id}/thumbnail",
+      "POST /api/uploads/{id}/complete {total_parts}: validates contiguous parts, then enqueues a job that (background) _assemble_parts concatenates parts -> source<suffix>, removes parts, and runs the normal upload pipeline. Returns {job_id} immediately so the tunnel response timeout isn't hit.",
+      "client then polls /api/uploads/{job_id} as usual"
     ],
     "playback_mse": [
       "GET /embed/{id} -> HTML shell loads player bundle",

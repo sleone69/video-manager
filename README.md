@@ -57,6 +57,7 @@ Edit `.env` and fill in your credentials:
 | `CHUNK_SIZE_BYTES` | fMP4 chunk size in bytes (default `6291456` = 6 MB; 4–8 MB recommended) |
 | `REPLICA_COUNT` | Host copies kept per chunk (default `2`). Fewer = faster uploads; the refresher maintains this count |
 | `UPLOAD_CONCURRENCY` | How many chunks upload at once (default `3`) |
+| `UPLOAD_PART_SIZE_BYTES` | Browser→backend upload part size (default `50331648` = 48 MB; kept under Cloudflare's tunnel cap) |
 | `STREAMTAPE_ENABLED` | `true` to also upload whole-video Streamtape parts (default `false`; slow — re-uploads the whole video) |
 | `STREAMTAPE_PART_SIZE_BYTES` | Max bytes per Streamtape part (default `8589934592` = 8 GB) |
 | `REFRESH_INTERVAL_SEC` | Expiry-refresher loop interval (default `21600` = 6 h) |
@@ -260,6 +261,11 @@ Cloudflare tunnel is live: https://<random-words>.trycloudflare.com
   `*.trycloudflare.com` URL each run.
 - **Named tunnel** (stable hostname): set `CLOUDFLARE_TUNNEL_TOKEN` from the Cloudflare Zero Trust dashboard.
 - Disable with `CLOUDFLARE_TUNNEL_ENABLED=false`.
+
+**Uploads through the tunnel** work out of the box: Cloudflare's free plan caps request bodies at ~100 MB, so the
+dashboard uploads in **chunks** — it slices the file into `UPLOAD_PART_SIZE_BYTES` (48 MB) parts, uploads each as
+its own request, and the backend reassembles them before processing. Multi-GB videos upload fine over the tunnel.
+(The single-shot `POST /api/uploads` is still available for local/CLI use.)
 
 > ⚠ **Security:** the app has **no authentication** — a tunnel makes the dashboard (uploads/deletes) reachable
 > by anyone who has the URL. Only enable it when you intend public access, or put auth in front first.

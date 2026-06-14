@@ -1,32 +1,8 @@
 import React, { useCallback, useRef, useState } from 'react'
-import { type JobProgress } from './api'
+import { type JobProgress, initUpload, uploadPart, uploadThumbnail, completeUpload } from './api'
 
 interface Props {
   onJobStarted: (job: JobProgress) => void
-}
-
-/** POST with XHR so we get upload progress events. */
-function xhrUpload(
-  url: string,
-  formData: FormData,
-  onProgress: (pct: number, loaded: number, total: number) => void,
-): Promise<{ job_id: string; video_id: string }> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', url)
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress((e.loaded / e.total) * 100, e.loaded, e.total)
-    }
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(JSON.parse(xhr.responseText))
-      } else {
-        reject(new Error(`Upload failed: ${xhr.status} – ${xhr.responseText}`))
-      }
-    }
-    xhr.onerror = () => reject(new Error('Network error during upload'))
-    xhr.send(formData)
-  })
 }
 
 export function UploadForm({ onJobStarted }: Props) {
@@ -58,20 +34,31 @@ export function UploadForm({ onJobStarted }: Props) {
     setUploadLoaded(0)
     setUploadTotal(videoFile.size)
     try {
-      const fd = new FormData()
-      fd.append('video', videoFile)
-      fd.append('name', name.trim())
-      fd.append('description', description.trim())
-      if (thumbnailFile) fd.append('thumbnail', thumbnailFile)
-      const { job_id } = await xhrUpload(
-        '/api/uploads',
-        fd,
-        (pct, loaded, total) => {
-          setUploadPct(pct)
-          setUploadLoaded(loaded)
+      // Chunked upload: slice the file into sub-100 MB parts so each request fits
+      // under Cloudflare's tunnel body cap. The backend reassembles them.
+      const { upload_id, part_size } = await initUpload({
+        name: name.trim(),
+        description: description.trim(),
+        filename: videoFile.name,
+      })
+      const total = videoFile.size
+      const totalParts = Math.max(1, Math.ceil(total / part_size))
+      let uploadedBytes = 0
+      for (let i = 0; i < totalParts; i++) {
+        const start = i * part_size
+        const blob = videoFile.slice(start, Math.min(start + part_size, total))
+        await uploadPart(upload_id, i, blob, (loaded) => {
+          const cur = uploadedBytes + loaded
+          setUploadPct((cur / total) * 100)
+          setUploadLoaded(cur)
           setUploadTotal(total)
-        },
-      )
+        })
+        uploadedBytes = Math.min(start + part_size, total)
+        setUploadPct((uploadedBytes / total) * 100)
+        setUploadLoaded(uploadedBytes)
+      }
+      if (thumbnailFile) await uploadThumbnail(upload_id, thumbnailFile)
+      const { job_id } = await completeUpload(upload_id, totalParts)
       // bootstrap the job card immediately
       onJobStarted({
         job_id,

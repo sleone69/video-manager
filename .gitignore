@@ -5,3 +5,5 @@ data/
 .claude/
 sample/
 logs/
+frontend/dist/
+frontend/node_modules/

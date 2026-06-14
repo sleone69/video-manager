@@ -78,3 +78,61 @@ export async function cancelJob(jobId: string): Promise<void> {
     throw new Error(`Cancel failed: ${res.status} – ${text}`)
   }
 }
+
+// ── Chunked upload (works through the Cloudflare tunnel; keeps each request small) ──
+
+export interface UploadInit { upload_id: string; video_id: string; part_size: number }
+
+export async function initUpload(meta: {
+  name: string; description?: string; star_ids?: string; filename: string
+}): Promise<UploadInit> {
+  const res = await fetch(`${BASE}/api/uploads/init`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(meta),
+  })
+  if (!res.ok) throw new Error(`Upload init failed: ${res.status} – ${await res.text()}`)
+  return res.json()
+}
+
+/** PUT one part (raw bytes) with progress. */
+export function uploadPart(
+  uploadId: string,
+  index: number,
+  blob: Blob,
+  onProgress?: (loaded: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', `${BASE}/api/uploads/${uploadId}/part/${index}`)
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    if (onProgress) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded) }
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new Error(`Part ${index} failed: ${xhr.status} – ${xhr.responseText}`))
+    xhr.onerror = () => reject(new Error(`Network error on part ${index}`))
+    xhr.send(blob)
+  })
+}
+
+export async function uploadThumbnail(uploadId: string, file: File): Promise<void> {
+  const res = await fetch(
+    `${BASE}/api/uploads/${uploadId}/thumbnail?filename=${encodeURIComponent(file.name)}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file },
+  )
+  if (!res.ok) throw new Error(`Thumbnail upload failed: ${res.status}`)
+}
+
+export async function completeUpload(
+  uploadId: string,
+  totalParts: number,
+): Promise<{ job_id: string; video_id: string }> {
+  const res = await fetch(`${BASE}/api/uploads/${uploadId}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ total_parts: totalParts }),
+  })
+  if (!res.ok) throw new Error(`Upload finalize failed: ${res.status} – ${await res.text()}`)
+  return res.json()
+}
