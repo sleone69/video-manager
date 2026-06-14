@@ -4,6 +4,4 @@ data/
 .venv/
 .claude/
 sample/
-frontend/node_modules/
-frontend/dist/
 logs/
